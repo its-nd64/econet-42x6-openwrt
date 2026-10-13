@@ -1,0 +1,89 @@
+diff -u -r a/drivers/phy/airoha/phy-airoha-xpon.c b/drivers/phy/airoha/phy-airoha-xpon.c
+--- a/drivers/phy/airoha/phy-airoha-xpon.c	2026-10-11 20:55:03.754577271 +0000
++++ b/drivers/phy/airoha/phy-airoha-xpon.c	2026-10-11 20:55:03.994801103 +0000
+@@ -162,6 +162,7 @@
+ 	bool has_integrated_pma;
+ 	bool manages_fw_ready;
+ 	bool has_gpon_bip;
++	bool no_ext_preamble_reg;
+ 	int (*configure)(struct airoha_xpon_phy *priv);
+ };
+ 
+@@ -204,6 +205,33 @@
+ 	airoha_xpon_phy_write(priv, reg, regval);
+ }
+ 
++/*
++ * On EN7523 the address 0x1faf0408 (XPON_GPON_EXT_PREAMBLE) is not decoded by the
++ * bus: any access, read or write, stalls it with no timeout and takes the whole
++ * SoC down (loss of console and network). This SoC does not implement the legacy
++ * GPON register group; its PON is driven through the PMA/PCS block instead. Keep
++ * the shared PHY driver usable on EN7523 by never touching that address.
++ */
++static void airoha_xpon_phy_write_ext_preamble(struct airoha_xpon_phy *priv,
++					       u32 mask, u32 val)
++{
++	if (priv->soc->no_ext_preamble_reg) {
++		dev_info_once(priv->dev,
++			      "EN7523: skip GPON 0x0408 write (register not decoded)\n");
++		return;
++	}
++
++	airoha_xpon_phy_rmw(priv, XPON_GPON_EXT_PREAMBLE, mask, val);
++}
++
++static u32 airoha_xpon_phy_read_ext_preamble(struct airoha_xpon_phy *priv)
++{
++	if (priv->soc->no_ext_preamble_reg)
++		return 0;
++
++	return airoha_xpon_phy_read(priv, XPON_GPON_EXT_PREAMBLE);
++}
++
+ static u32 airoha_xpon_phy_state(struct airoha_xpon_phy *priv)
+ {
+ 	return FIELD_GET(XPON_PHYSTA1_STATE_MASK,
+@@ -466,11 +494,11 @@
+ 	      FIELD_PREP(XPON_GPON_EXT_OPER_MASK,
+ 			 AIROHA_XPON_PHY_GPON_OPER_RANGING);
+ 
+-	airoha_xpon_phy_rmw(priv, XPON_GPON_EXT_PREAMBLE, mask, val);
++	airoha_xpon_phy_write_ext_preamble(priv, mask, val);
+ 	dev_dbg(priv->dev,
+ 		"GPON PHY extended preamble programmed: O3/O4=%u O5=%u reg=%#010x\n",
+ 		 o3_o4_preamble, o5_preamble,
+-		 airoha_xpon_phy_read(priv, XPON_GPON_EXT_PREAMBLE));
++		 airoha_xpon_phy_read_ext_preamble(priv));
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(airoha_xpon_phy_set_gpon_extended_preamble);
+@@ -532,10 +560,10 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	airoha_xpon_phy_rmw(priv, XPON_GPON_EXT_PREAMBLE, mask, val);
++	airoha_xpon_phy_write_ext_preamble(priv, mask, val);
+ 	dev_info(priv->dev,
+ 		 "GPON PHY operational state=%u reg=%#010x\n",
+-		 state, airoha_xpon_phy_read(priv, XPON_GPON_EXT_PREAMBLE));
++		 state, airoha_xpon_phy_read_ext_preamble(priv));
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(airoha_xpon_phy_set_gpon_oper_state);
+@@ -556,7 +584,7 @@
+ 		 airoha_xpon_phy_read(priv, XPON_TDCSET2),
+ 		 airoha_xpon_phy_read(priv, XPON_GPON_PREAMBLE),
+ 		 airoha_xpon_phy_read(priv, XPON_GPON_DELIMITER_GUARD),
+-		 airoha_xpon_phy_read(priv, XPON_GPON_EXT_PREAMBLE),
++		 airoha_xpon_phy_read_ext_preamble(priv),
+ 		 airoha_xpon_phy_read(priv, XPON_INT_STATUS),
+ 		 airoha_xpon_phy_read(priv, XPON_INT_ENABLE));
+ 
+@@ -1324,6 +1352,7 @@
+ 	.gpon_bit_delay_reg = XPON_GPON_TX_BIT_DELAY,
+ 	.gpon_bit_delay_mask = XPON_GPON_TX_BIT_DELAY_MASK,
+ 	.has_integrated_pma = true,
++	.no_ext_preamble_reg = true,
+ 	.configure = airoha_en7523_xpon_phy_configure,
+ };
+ 

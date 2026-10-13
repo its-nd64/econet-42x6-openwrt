@@ -1,0 +1,50 @@
+diff -u -r a/drivers/net/pcs/airoha/pcs-en7523.c b/drivers/net/pcs/airoha/pcs-en7523.c
+--- a/drivers/net/pcs/airoha/pcs-en7523.c	2026-10-12 09:06:33.033889519 +0000
++++ b/drivers/net/pcs/airoha/pcs-en7523.c	2026-10-12 09:06:33.069328634 +0000
+@@ -684,6 +684,7 @@
+ 	struct device *dev = &pdev->dev;
+ 	const struct en7523_pcs_data *data;
+ 	struct en7523_pcs *priv;
++	struct fwnode_pcs_provider *provider;
+ 	unsigned int i;
+ 	int ret;
+ 
+@@ -769,20 +770,28 @@
+ 
+ 	platform_set_drvdata(pdev, priv);
+ 
+-	return fwnode_pcs_add_provider(dev_fwnode(dev), en7523_pcs_get, priv);
++	/*
++	 * 42X6 / M8: this tree uses an earlier fwnode_pcs API than the fork:
++	 * fwnode_pcs_add_provider() returns a provider pointer (not int)
++	 * and has a devm variant. Follow the pcs-airoha-common.c pattern
++	 * from this same tree.
++	 */
++	provider = devm_fwnode_pcs_add_provider(dev, dev_fwnode(dev),
++						en7523_pcs_get, priv);
++	if (IS_ERR(provider))
++		return dev_err_probe(dev, PTR_ERR(provider),
++				     "Failed to add PCS provider\n");
++
++	return 0;
+ }
+ 
+ static void en7523_pcs_remove(struct platform_device *pdev)
+ {
+ 	struct en7523_pcs *priv = platform_get_drvdata(pdev);
+-	unsigned int i;
+-
+-	fwnode_pcs_del_provider(dev_fwnode(&pdev->dev));
+-
+-	rtnl_lock();
+-	for (i = 0; i < priv->data->num_ports; i++)
+-		phylink_release_pcs(&priv->ports[i].pcs);
+-	rtnl_unlock();
++	/*
++	 * 42X6 / M8: no manual teardown -- the provider is devm-managed,
++	 * and this tree's API has no phylink_release_pcs().
++	 */
++	(void)priv;
+ }
+ 
+ static const struct en7523_pcs_res en7523_pon_res[] = {

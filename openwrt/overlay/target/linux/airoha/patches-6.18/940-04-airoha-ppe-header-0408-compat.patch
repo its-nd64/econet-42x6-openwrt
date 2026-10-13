@@ -1,0 +1,40 @@
+diff -ruN a/drivers/net/ethernet/airoha/airoha_ppe.c b/drivers/net/ethernet/airoha/airoha_ppe.c
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-10 18:39:17.606768063 +0000
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c	2026-10-10 18:39:17.628549824 +0000
+@@ -352,7 +352,7 @@
+ 		airoha_fe_set(eth, REG_PPE_GLO_CFG(i), PPE_GLO_CFG_EN_MASK);
+ 	}
+ 
+-	for (i = 0; i < ARRAY_SIZE(eth->ports); i++) {
++	for (i = 0; i < eth->soc->max_gdm_ports; i++) {
+ 		struct airoha_gdm_port *port = eth->ports[i];
+ 		int j;
+ 
+@@ -855,19 +855,23 @@
+ 	if (type == PPE_PKT_TYPE_BRIDGE) {
+ 		data = &hwe->bridge.data;
+ 		ib2 = &hwe->bridge.ib2;
+-		meter = &hwe->bridge.l2.meter;
+ 	} else if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T) {
+ 		data = &hwe->ipv6.data;
+ 		ib2 = &hwe->ipv6.ib2;
+-		meter = &hwe->ipv6.meter;
+ 	} else {
+ 		data = &hwe->ipv4.data;
+ 		ib2 = &hwe->ipv4.ib2;
+-		meter = &hwe->ipv4.l2.meter;
+ 	}
+ 
++	/* 64-byte FOE entries have no meter word; this NPU-only stats path is
++	 * unused on EN7523 (it returns early above when stats are disabled).
++	 */
++	meter = data;
++
+ 	pse_port = FIELD_GET(AIROHA_FOE_IB2_PSE_PORT, *ib2);
+-	if (pse_port == FE_PSE_PORT_CDM4)
++	if (pse_port == FE_PSE_PORT_CDM4 ||
++	    (airoha_is(ppe->eth, en7523) &&
++	     pse_port == FE_PSE_PORT_GDM3))
+ 		return;
+ 
+ 	airoha_ppe_foe_flow_stat_entry_reset(ppe, npu, index);

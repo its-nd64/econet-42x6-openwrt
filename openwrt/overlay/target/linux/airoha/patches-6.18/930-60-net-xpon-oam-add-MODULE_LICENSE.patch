@@ -1,0 +1,16 @@
+diff -ruN a/net/xpon/oam/core.c b/net/xpon/oam/core.c
+--- a/net/xpon/oam/core.c	2026-10-10 19:07:12.661305209 +0000
++++ b/net/xpon/oam/core.c	2026-10-10 19:07:12.688722204 +0000
+@@ -105,3 +105,12 @@
+ 		kfree_skb(skb);
+ }
+ EXPORT_SYMBOL_GPL(xpon_oam_receive);
++
++/* 42X6 (930-60): the community airoha_en7523_all branch is missing
++ * MODULE_LICENSE in all three files of net/xpon/oam, so with XPON_OAM=m
++ * kbuild/modpost stops with:
++ *   ERROR: modpost: missing MODULE_LICENSE() in net/xpon/oam/xpon-oam.o
++ * (the fork's own build probably sets XPON_OAM=y, which hides it.) One copy
++ * HERE is enough because all three files link into the same xpon-oam.ko.
++ */
++MODULE_LICENSE("GPL");

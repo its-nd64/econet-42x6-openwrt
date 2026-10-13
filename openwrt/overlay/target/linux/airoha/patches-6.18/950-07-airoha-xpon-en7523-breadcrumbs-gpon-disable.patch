@@ -1,0 +1,68 @@
+diff -u -r a/drivers/net/ethernet/airoha/airoha_xpon.c b/drivers/net/ethernet/airoha/airoha_xpon.c
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c	2026-10-12 19:24:30.669158902 +0000
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c	2026-10-12 19:24:30.671607480 +0000
+@@ -2594,6 +2594,9 @@
+ 	bool omci_reset = false;
+ 	int ret;
+ 
++	pr_info("M12-a: gpon_disable enter mac_enabled=%u phy_active=%u\n",
++		mac_enabled, phy_active);
++
+ 	airoha_xpon_tx_enable(priv, false);
+ 
+ 	if (!mac_enabled && !phy_active)
+@@ -2612,32 +2615,45 @@
+ 	WRITE_ONCE(priv->mac_enabled, false);
+ 	gpon_bip_set_active(priv, false);
+ 	if (mac_enabled) {
++		pr_info("M12-b: before masking MAC IRQ\n");
+ 		gpon_write(priv, GPON_INT_ENABLE, 0);
+ 		gpon_write(priv, GPON_INT_STATUS, ~0U);
++		pr_info("M12-c: before synchronize_irq\n");
+ 		if (priv->irq >= 0)
+ 			synchronize_irq(priv->irq);
++		pr_info("M12-d: AFTER synchronize_irq (OK)\n");
+ 	}
+ 
+ 	atomic_set(&priv->pending_irqs, 0);
++	pr_info("M12-e: before cancel_work_sync(irq_work)\n");
+ 	if (current_work() != &priv->irq_work)
+ 		cancel_work_sync(&priv->irq_work);
++	pr_info("M12-f: AFTER cancel irq_work (OK)\n");
+ 	gpon_ploam_rx_queue_reset(priv);
+ 
++	pr_info("M12-g: before cancel to1_work\n");
+ 	if (current_work() == &priv->to1_work.work)
+ 		cancel_delayed_work(&priv->to1_work);
+ 	else
+ 		cancel_delayed_work_sync(&priv->to1_work);
++	pr_info("M12-h: AFTER cancel to1_work (OK)\n");
+ 
++	pr_info("M12-i: before cancel to2_work\n");
+ 	if (current_work() == &priv->to2_work.work)
+ 		cancel_delayed_work(&priv->to2_work);
+ 	else
+ 		cancel_delayed_work_sync(&priv->to2_work);
++	pr_info("M12-j: AFTER cancel to2_work (OK)\n");
+ 
++	pr_info("M12-k: before timer_delete_sync(ber_timer)\n");
+ 	timer_delete_sync(&priv->ber_timer);
++	pr_info("M12-l: AFTER timer_delete_sync (OK)\n");
++	pr_info("M12-m: before cancel phy_link_work\n");
+ 	if (current_work() == &priv->phy_link_work.work)
+ 		cancel_delayed_work(&priv->phy_link_work);
+ 	else
+ 		cancel_delayed_work_sync(&priv->phy_link_work);
++	pr_info("M12-n: AFTER cancel phy_link_work (OK)\n");
+ 	WRITE_ONCE(priv->phy_link_known, false);
+ 	WRITE_ONCE(priv->phy_link_up, false);
+ 
+@@ -3162,6 +3178,8 @@
+ 	u32 enabled, raw;
+ 
+ 	raw = gpon_read(priv, GPON_INT_STATUS);
++	dev_info_ratelimited(priv->dev, "M12-isr: raw=%#x mac_enabled=%u\n",
++			     raw, READ_ONCE(priv->mac_enabled));
+ 	if (!raw)
+ 		return IRQ_NONE;
+ 

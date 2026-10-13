@@ -1,0 +1,40 @@
+diff -u -r a/drivers/phy/airoha/phy-airoha-xpon.c b/drivers/phy/airoha/phy-airoha-xpon.c
+--- a/drivers/phy/airoha/phy-airoha-xpon.c	2026-10-12 07:26:21.734346889 +0000
++++ b/drivers/phy/airoha/phy-airoha-xpon.c	2026-10-12 07:26:21.769402500 +0000
+@@ -163,6 +163,7 @@
+ 	bool manages_fw_ready;
+ 	bool has_gpon_bip;
+ 	bool no_ext_preamble_reg;
++	bool no_fec_status_reg;
+ 	int (*configure)(struct airoha_xpon_phy *priv);
+ };
+ 
+@@ -420,6 +421,20 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * EN7523 does not decode the legacy GPON register group. The TX FEC
++	 * status register (0x040c) sits in the same 0x040x block as the fatal
++	 * XPON_GPON_EXT_PREAMBLE (0x0408): an access there stalls the bus with
++	 * no timeout and takes the whole SoC down (loss of console and LAN).
++	 * Report "not supported" instead of touching either FEC status
++	 * register on this SoC. This is reached from the OMCI telemetry path,
++	 * which is why opening the LuCI OMCI page used to hang the board.
++	 */
++	if (priv->soc->no_fec_status_reg) {
++		dev_info_once(priv->dev,
++			      "EN7523: skip FEC 0x021c/0x040c read (registers not decoded)\n");
++		return -EOPNOTSUPP;
++	}
+ 	*downstream = airoha_xpon_phy_read(priv, XPON_RX_FEC_STATUS) &
+ 			  XPON_FEC_STATUS_ACTIVE;
+ 	*upstream = airoha_xpon_phy_read(priv, XPON_TX_FEC_STATUS) &
+@@ -1353,6 +1368,7 @@
+ 	.gpon_bit_delay_mask = XPON_GPON_TX_BIT_DELAY_MASK,
+ 	.has_integrated_pma = true,
+ 	.no_ext_preamble_reg = true,
++	.no_fec_status_reg = true,
+ 	.configure = airoha_en7523_xpon_phy_configure,
+ };
+ 

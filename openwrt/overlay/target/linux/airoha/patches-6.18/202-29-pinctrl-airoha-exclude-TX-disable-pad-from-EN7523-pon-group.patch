@@ -1,0 +1,46 @@
+From: econet-42x6 port <local>
+Subject: [PATCH] pinctrl: airoha: exclude the TX_DISABLE pad from the EN7523 "pon" group
+
+The EN7523 "pon" pin group as introduced together with the SoC support
+lists pins 28..33, i.e. GPIO16..GPIO21.  Pin 28 is GPIO16, which on the
+EcoNet vGP-42X6V1 (and on the EN751221 reference design) is the
+board-level TX_DISABLE line of the optical frontend and is therefore
+consumed as a *GPIO* by the xPON PHY driver:
+
+    priv->tx_disable_gpio =
+        devm_gpiod_get(dev, "tx-disable", GPIOD_OUT_HIGH);   /* not optional */
+
+Applying the "pon" mux state claims every pin of the group through
+pin_request(), so the GPIO request for that very same pad is refused:
+
+    pinctrl-airoha-en7523 ...: pin gpio16 already requested by 1faf0000.phy;
+                               cannot claim for 1fbf0200.system-controller:pinctrl:528
+    pinctrl-airoha-en7523 ...: error -EINVAL: pin-28 (...:pinctrl:528)
+    airoha-xpon-phy 1faf0000.phy: error -EINVAL: failed to get TX disable GPIO
+    airoha-xpon-phy 1faf0000.phy: probe with driver airoha-xpon-phy failed with error -22
+
+which leaves the whole xPON stack unprobed (/sys/class/xpon empty, OMCI
+commands returning -ENODEV).
+
+Drop pin 28 from the group so that the PON-owned pads are muxed while
+GPIO16 keeps its split ownership, exactly as described in
+phy-airoha-xpon.c:
+
+    "PON pad routing belongs to pinctrl.  In particular GPIO16 is the
+     board-level TX_DISABLE line on the EN751221 reference design while
+     GPIO17..20 remain owned by the PON hardware."
+
+This mirrors the downstream fix (930-264: pon_pins { 16..20 } -> { 29..33 }).
+The PON_MODE register bit written by airoha_pinmux_set_mux() is unchanged.
+
+--- a/drivers/pinctrl/airoha/pinctrl-en7523.c
++++ b/drivers/pinctrl/airoha/pinctrl-en7523.c
+@@ -330,7 +330,7 @@
+ 	PINCTRL_PIN(41, "pcie_reset1"),
+ };
+ 
+-static const int pon_pins[] = { 28, 29, 30, 31, 32, 33 };
++static const int pon_pins[] = { 29, 30, 31, 32, 33 };
+ static const int pon_tod_1pps_pins[] = { 21 };
+ static const int gsw_tod_1pps_pins[] = { 21 };
+ static const int sipo_pins[] = { 13, 38 };

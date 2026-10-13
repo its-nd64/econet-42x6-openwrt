@@ -1,0 +1,141 @@
+From: econet-42x6 port <local>
+Subject: [PATCH] net: airoha: en7523: bring the GPON MAC block out of its dead state
+
+On EN7523, the GPON MAC block (0x1fb60000 + GPON_REG_OFFSET 0x4000) reads back
+0xdeadbeef -- the pattern this SoC's bus returns for an undecoded region -- so
+probe fails with:
+
+    error -EIO: failed to start GPON MBI/MPI: 0xdeadbeef
+    error -EIO: error on register xPON MAC
+
+Evidence already ruled out (see the project notes, section 13.6):
+  - not a wrong offset: the vendor DT declares xpon@1fb64000
+    { reg = <0x1fb64000 0x3e8 ...> } and 0x160 < 0x3e8, so it is inside;
+  - not a software sentinel: gpon_read() is just readl();
+  - not our reset pulse: dropping the resets (diagnostic image) gave the same result;
+  - not the clock framework: clk_summary has no xpon/gpon/pon clock;
+  - the PHY block at 0x1faf0000 still reads/writes normally
+    (set3=0x4581e110, serdes0=0x00100381).
+
+This patch does two things, following the exact sequence of the PON PCS
+driver in the fork (pcs-en7523.c: en7523_pcs_pon_serdes_sgmii_init(),
+community patch 930-21):
+
+ 1. reset the SerDes/XSI-MAC clock domain via SCU (RST_CTRL2 = REG_RST_CTRL2):
+        RST_CTRL2 = 0x1   -> 0x0        (EN7523_XPON_PHY_RST, bit 0)
+        usleep_range(10 ms)
+        RST_CTRL2 = 0x180 -> 0x0        (EN7523_XSI_MAC_RST bit 7 + XSI_PHY_RST bit 8)
+        SSR3[14:13] = 0x2               (PON_MODE = SGMII)
+ 2. release the GPON MAC block from reset: RST_CTRL1 (0x834) bit 31 =
+    EN7523_XPON_MAC_RST (this reset is created by this port's 202-30 patch for
+    airoha_xpon_reset_mac()).
+
+Plus BEFORE/AFTER state logging (RST_CTRL1, RST_CTRL2, SSR3, WAN_CONF) and a
+probe read of the GPON window at 0x0 / 0x160 / 0xffc -- so it is visible
+immediately which step helped. Applies to EN7523 only
+(match_data->version == airoha_en7523).
+
+---
+--- a/drivers/net/ethernet/airoha/airoha_xpon.h
++++ b/drivers/net/ethernet/airoha/airoha_xpon.h
+@@ -24,6 +24,26 @@
+ #define EPON_REG_OFFSET			0x00006000
+ 
+ #define XPON_SCU_WAN_CONF		0x070
++
++/*
++ * EN7523: the GPON MAC block (0x1fb60000 + GPON_REG_OFFSET 0x4000) sits behind
++ * the SerDes/XSI clock domain.  On the fork's boards this is handled by the
++ * PON PCS driver (pcs-en7523.c: en7523_pcs_pon_serdes_sgmii_init(), community
++ * patch 930-21); our build has CONFIG_PCS_AIROHA_EN7523 off (FWNODE_PCS API
++ * drift), so nobody does it, and every GPON register read returns 0xdeadbeef
++ * (the pattern this SoC's bus returns for an undecoded region).
++ *
++ * EN7523_SCU_RST_CFG/_CFG1 are REG_RST_CTRL2/REG_RST_CTRL1 of
++ * drivers/clk/clk-en7523.c: RST_CTRL2 bit 0 = EN7523_XPON_PHY_RST,
++ * bit 7 = EN7523_XSI_MAC_RST, bit 8 = EN7523_XSI_PHY_RST;
++ * RST_CTRL1 bit 31 = EN7523_XPON_MAC_RST.
++ */
++#define EN7523_SCU_RST_CFG		0x830
++#define EN7523_SCU_RST_CFG1		0x834
++#define EN7523_SCU_RST_CFG1_XPON_MAC	BIT(31)
++#define EN7523_SCU_SSR3			0x094
++#define EN7523_SCU_SSR3_PON_MODE	GENMASK(14, 13)
++#define EN7523_SCU_SSR3_PON_SGMII	(0x2 << 13)
+ #define EN7523_SCU_WAN_MODE_MASK	GENMASK(7, 0)
+ #define EN7528_SCU_WAN_MODE_MASK	GENMASK(2, 0)
+ #define EN751221_SCU_WAN_MODE_MASK	GENMASK(2, 0)
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c
+@@ -540,6 +540,60 @@
+ 					 1, 200);
+ }
+ 
++/*
++ * EN7523: bring the GPON MAC block out of its inaccessible state.
++ *
++ * 1) Reset the SerDes/XSI-MAC clock domain -- the EXACT SCU sequence of the
++ *    fork's PON PCS driver (not touching the PMA block: the 0x1faf0000 PHY is
++ *    already initialised by phy-airoha-xpon and running correctly):
++ *      RST_CTRL2 = 0x1   -> 0x0            XPON_PHY_RST (bit 0)
++ *      usleep_range(10 ms)
++ *      RST_CTRL2 = 0x180 -> 0x0            XSI_MAC_RST (bit 7) + XSI_PHY_RST (bit 8)
++ *      SSR3[14:13] = 0x2                   PON_MODE = SGMII
++ * 2) Release the GPON MAC block from reset (RST_CTRL1 bit 31 =
++ *    EN7523_XPON_MAC_RST) -- this reset is created by patch 202-30 for
++ *    airoha_xpon_reset_mac(), but on this board the bit may still be held
++ *    (nobody reads it back to know).
++ * 3) Re-read the SCU + probe-read the GPON window (0x0, 0x160, 0xffc) so the
++ *    result is visible immediately: if it is still 0xdeadbeef, this is NOT
++ *    the cause.
++ */
++static void airoha_xpon_en7523_scu_clock_reset(struct xpon_priv *priv)
++{
++	u32 rst1_pre, rst2_pre, ssr3_pre, wan_pre, rst1, ssr3;
++
++	if (priv->match_data->version != airoha_en7523 || !priv->scu)
++		return;
++
++	regmap_read(priv->scu, EN7523_SCU_RST_CFG1, &rst1_pre);
++	regmap_read(priv->scu, EN7523_SCU_RST_CFG, &rst2_pre);
++	regmap_read(priv->scu, EN7523_SCU_SSR3, &ssr3_pre);
++	regmap_read(priv->scu, XPON_SCU_WAN_CONF, &wan_pre);
++	dev_info(priv->dev,
++		 "EN7523 SCU before: RST_CTRL1=%#010x RST_CTRL2=%#010x SSR3=%#010x WAN_CONF=%#010x GPON_MBI=%#010x\n",
++		 rst1_pre, rst2_pre, ssr3_pre, wan_pre,
++		 gpon_read(priv, GPON_MBI_MPI_STOP));
++
++	regmap_write(priv->scu, EN7523_SCU_RST_CFG, 0x1);
++	regmap_write(priv->scu, EN7523_SCU_RST_CFG, 0x0);
++	usleep_range(10000, 11000);
++	regmap_write(priv->scu, EN7523_SCU_RST_CFG, 0x180);
++	regmap_write(priv->scu, EN7523_SCU_RST_CFG, 0x0);
++	regmap_update_bits(priv->scu, EN7523_SCU_SSR3,
++			   EN7523_SCU_SSR3_PON_MODE, EN7523_SCU_SSR3_PON_SGMII);
++
++	regmap_read(priv->scu, EN7523_SCU_RST_CFG1, &rst1);
++	regmap_write(priv->scu, EN7523_SCU_RST_CFG1,
++		     rst1 & ~EN7523_SCU_RST_CFG1_XPON_MAC);
++	usleep_range(1000, 1100);
++	regmap_read(priv->scu, EN7523_SCU_RST_CFG1, &rst1);
++	regmap_read(priv->scu, EN7523_SCU_SSR3, &ssr3);
++	dev_info(priv->dev,
++		 "EN7523 SCU after: RST_CTRL1=%#010x (XPON_MAC_RST bit31 %s) SSR3=%#010x GPON[0x0]=%#010x GPON[0x160]=%#010x GPON[0xffc]=%#010x\n",
++		 rst1, (rst1 & EN7523_SCU_RST_CFG1_XPON_MAC) ? "set" : "clear",
++		 ssr3, gpon_read(priv, 0x0), gpon_read(priv, GPON_MBI_MPI_STOP),
++		 gpon_read(priv, 0xffc));
++}
++
+ static int gpon_set_fe_mode(struct xpon_priv *priv)
+ {
+ 	return airoha_xpon_set_fe_mode(priv->dev, priv->gdm_dev,
+@@ -555,6 +609,9 @@
+ static int gpon_prepare_hardware(struct xpon_priv *priv)
+ {
+ 	u32 mbi, stop_mask = MBI_RX_STOP | MBI_TX_STOP;
++
++	/* Must run BEFORE the first GPON register read in this function. */
++	airoha_xpon_en7523_scu_clock_reset(priv);
+ 	int ret;
+ 
+ 	dev_dbg(priv->dev,

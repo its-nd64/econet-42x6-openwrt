@@ -1,0 +1,26 @@
+diff -ruN a/drivers/phy/airoha/Kconfig b/drivers/phy/airoha/Kconfig
+--- a/drivers/phy/airoha/Kconfig	2026-10-10 18:11:38.055140292 +0000
++++ b/drivers/phy/airoha/Kconfig	2026-10-10 18:11:38.063880075 +0000
+@@ -41,3 +41,13 @@
+ 	  Say 'Y' here to add support for Airoha AN7583 USB PHY driver.
+ 	  This driver create the basic PHY instance and provides initialize
+ 	  callback for USB port.
++
++config PHY_AIROHA_XPON
++	tristate "Airoha/EcoNet xPON PHY driver"
++	depends on ARCH_AIROHA || COMPILE_TEST
++	depends on OF
++	select GENERIC_PHY
++	help
++	  SerDes/PHY driver for the xPON MAC complex found in Airoha/EcoNet
++	  SoCs (EN7523 and friends). It owns the PON SERDES lane used by the
++	  GPON/EPON MAC driver and exposes it through the generic PHY API.
+diff -ruN a/drivers/phy/airoha/Makefile b/drivers/phy/airoha/Makefile
+--- a/drivers/phy/airoha/Makefile	2026-10-10 18:11:38.058262836 +0000
++++ b/drivers/phy/airoha/Makefile	2026-10-10 18:11:38.063880075 +0000
+@@ -4,3 +4,5 @@
+ obj-$(CONFIG_PHY_AIROHA_PCIE)		+= phy-airoha-pcie.o
+ obj-$(CONFIG_PHY_AIROHA_USB)		+= phy-airoha-usb.o
+ obj-$(CONFIG_PHY_AIROHA_AN7583_USB)	+= phy-airoha-an7583-usb.o
++
++obj-$(CONFIG_PHY_AIROHA_XPON)		+= phy-airoha-xpon.o

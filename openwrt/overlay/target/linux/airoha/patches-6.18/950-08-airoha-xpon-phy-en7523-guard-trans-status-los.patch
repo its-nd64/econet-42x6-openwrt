@@ -1,0 +1,39 @@
+diff -u -r a/drivers/phy/airoha/phy-airoha-xpon.c b/drivers/phy/airoha/phy-airoha-xpon.c
+--- a/drivers/phy/airoha/phy-airoha-xpon.c	2026-10-12 20:24:47.148294008 +0000
++++ b/drivers/phy/airoha/phy-airoha-xpon.c	2026-10-12 20:24:47.148643840 +0000
+@@ -258,6 +258,22 @@
+ 
+ static bool airoha_xpon_phy_los(struct airoha_xpon_phy *priv)
+ {
++	/*
++	 * EN7523 does not decode the legacy GPON register group: an access to
++	 * that block stalls the bus with no timeout and takes the whole SoC
++	 * down (no console, no LAN) - the same failure mode already worked
++	 * around for the FEC status registers, see
++	 * airoha_xpon_phy_get_gpon_fec_status().  XPON_TRANS_STATUS lives in
++	 * that block, and it only bites once the PHY has locked to a
++	 * downstream signal: that is why booting with the fibre connected hung
++	 * with no console output at all, while a boot without light survived.
++	 * XPON_PHYSTA1_READY already encodes "downstream signal usable"
++	 * (sta1=0x01180000 with light vs 0x01080000 without), so derive LOS
++	 * from it and never touch the stalling block on this SoC.
++	 */
++	if (priv->soc->no_fec_status_reg)
++		return !airoha_xpon_phy_ready(priv);
++
+ 	return airoha_xpon_phy_read(priv, XPON_TRANS_STATUS) &
+ 		XPON_TRANS_STATUS_LOS;
+ }
+@@ -279,8 +295,12 @@
+ 		return 0;
+ 	}
+ 
++	pr_info("M13-a: before reading ready\n");
+ 	*ready = airoha_xpon_phy_ready(priv);
++	pr_info("M13-b: ready=%u\n", *ready);
++	pr_info("M13-c: before reading los\n");
+ 	*los = airoha_xpon_phy_los(priv);
++	pr_info("M13-d: los=%u\n", *los);
+ 
+ 	return 0;
+ }

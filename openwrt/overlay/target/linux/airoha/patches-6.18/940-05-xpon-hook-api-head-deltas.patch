@@ -1,0 +1,85 @@
+diff -ruN a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
+--- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-10 18:43:20.365139542 +0000
++++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-10 18:43:20.398717181 +0000
+@@ -1726,7 +1726,7 @@
+ 				handler = rcu_dereference(dev->xpon_oam);
+ 				if (handler && handler->rx)
+ 					consumed = handler->rx(handler->priv,
+-							       q->skb,
++							       q->skb, channel,
+ 							       gem_port_id,
+ 							       flags);
+ 				else
+@@ -4061,10 +4061,10 @@
+ }
+ 
+ int airoha_eth_xmit_xpon_oam(struct net_device *netdev, struct sk_buff *skb,
+-			     u16 gem_port_id)
++			     u8 channel, u16 gem_port_id)
+ {
+ 	struct airoha_xpon_tx_info info = {
+-		.tcont = 0,
++		.tcont = channel,
+ 		.queue = 7,
+ 		.oam = true,
+ 	};
+diff -ruN a/drivers/net/ethernet/airoha/airoha_eth.h b/drivers/net/ethernet/airoha/airoha_eth.h
+--- a/drivers/net/ethernet/airoha/airoha_eth.h	2026-10-10 18:43:20.362692650 +0000
++++ b/drivers/net/ethernet/airoha/airoha_eth.h	2026-10-10 18:43:20.398268246 +0000
+@@ -599,7 +599,8 @@
+ #define AIROHA_XPON_OAM_RX_F_CRC_ERROR	BIT(2)
+ 
+ struct airoha_xpon_oam_handler {
+-	bool (*rx)(void *priv, struct sk_buff *skb, u16 gem_port_id,
++	bool (*rx)(void *priv, struct sk_buff *skb, u8 channel,
++		   u16 gem_port_id,
+ 		   u32 flags);
+ 	void *priv;
+ };
+@@ -615,6 +616,12 @@
+ struct airoha_xpon_link_ops {
+ 	int (*start)(void *priv);
+ 	void (*stop)(void *priv);
++	/* EcoNet routes the GPON/EPON MAC interrupt through QDMA1 instead of
++	 * exposing a dedicated platform IRQ. Providers that need that path
++	 * publish the hard-IRQ callback here.
++	 * (42X6/940-05: taken from the clone HEAD at the same commit as the xPON driver.)
++	 */
++	void (*mac_irq)(void *priv);
+ };
+ 
+ /**
+@@ -836,9 +843,21 @@
+ }
+ 
+ enum airoha_ids {
+-	en7523 = 0x7523,
+-	en7581 = 0x7581,
+-	an7583 = 0x7583,
++	/* 42X6 (940-05): extra names following the clone HEAD (same commit as
++	 * the xPON driver in the overlay). The old 781502ce names stay as
++	 * aliases so existing code (airoha_is(), soc_data...) needs no change.
++	 */
++	econet_en751221 = 0x751221,
++	econet_en751627 = 0x751627,
++	econet_en7528 = 0x7528,
++	econet_en7580 = 0x7580,
++	airoha_en7523 = 0x7523,
++	airoha_en7581 = 0x7581,
++	airoha_an7583 = 0x7583,
++
++	en7523 = airoha_en7523,
++	en7581 = airoha_en7581,
++	an7583 = airoha_an7583,
+ };
+ 
+ #define airoha_is(eth, ...) ({ \
+@@ -895,7 +914,7 @@
+ void airoha_eth_unregister_xpon_oam(struct net_device *netdev,
+ 				    struct airoha_xpon_oam_handler *handler);
+ int airoha_eth_xmit_xpon_oam(struct net_device *netdev, struct sk_buff *skb,
+-			     u16 gem_port_id);
++			     u8 channel, u16 gem_port_id);
+ int airoha_eth_xpon_add_service(struct net_device *netdev,
+ 				const struct airoha_xpon_service_cfg *cfg);
+ int airoha_eth_xpon_get_tx_info(struct net_device *netdev, bool vlan_valid,

@@ -1,0 +1,241 @@
+diff -u -r a/drivers/net/ethernet/airoha/airoha_gpon_omci.c b/drivers/net/ethernet/airoha/airoha_gpon_omci.c
+--- a/drivers/net/ethernet/airoha/airoha_gpon_omci.c	2026-10-12 07:26:21.825676075 +0000
++++ b/drivers/net/ethernet/airoha/airoha_gpon_omci.c	2026-10-12 07:26:21.894025025 +0000
+@@ -17,6 +17,7 @@
+ 	struct airoha_gpon_omci *omci = omci_device_priv(odev);
+ 	int ret;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_start_transport\n");
+ 	ret = airoha_eth_xpon_control_start(omci->gdm_dev);
+ 	if (ret)
+ 		return ret;
+@@ -32,6 +33,7 @@
+ {
+ 	struct airoha_gpon_omci *omci = omci_device_priv(odev);
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_stop_transport\n");
+ 	airoha_gpon_omci_hw_stop(omci->hw_priv);
+ 	airoha_eth_xpon_control_stop(omci->gdm_dev);
+ }
+@@ -41,6 +43,7 @@
+ {
+ 	struct airoha_gpon_omci *omci = omci_device_priv(odev);
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_xmit\n");
+ 	return airoha_eth_xmit_xpon_oam(omci->gdm_dev, skb, 0, gem_port_id);
+ }
+ 
+diff -u -r a/drivers/net/ethernet/airoha/airoha_xpon.c b/drivers/net/ethernet/airoha/airoha_xpon.c
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c	2026-10-12 07:26:21.825561264 +0000
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c	2026-10-12 07:26:21.893002325 +0000
+@@ -1866,6 +1866,7 @@
+ {
+ 	struct xpon_priv *priv = hw_priv;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_set_olt_profile\n");
+ 	if (!state || state->effective == OMCI_OLT_PROFILE_UNSPEC ||
+ 	    state->effective == OMCI_OLT_PROFILE_AUTO)
+ 		return -EINVAL;
+@@ -1891,6 +1892,7 @@
+ {
+ 	struct xpon_priv *priv = hw_priv;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_set_operational\n");
+ 	mutex_lock(&priv->link_state_lock);
+ 	priv->omci_operational = operational;
+ 	mutex_unlock(&priv->link_state_lock);
+@@ -1927,6 +1929,7 @@
+ {
+ 	struct xpon_priv *priv = hw_priv;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_config_changed\n");
+ 	if (!identity)
+ 		return;
+ 
+@@ -1965,6 +1968,7 @@
+ {
+ 	struct xpon_priv *priv = hw_priv;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_get_ani_topology\n");
+ 	if (!topology)
+ 		return -EINVAL;
+ 
+@@ -1994,6 +1998,7 @@
+ 	unsigned int channel = 0;
+ 	int ret;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_set_tcont\n");
+ 	ret = gpon_set_omci_tcont_hw(priv, entity_id, alloc_id, valid,
+ 				     &channel);
+ 	if (ret) {
+@@ -2018,6 +2023,7 @@
+ 	struct xpon_priv *priv = hw_priv;
+ 	int ret;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_set_gem_port\n");
+ 	ret = gpon_set_gem_port_hw(priv, gem_port_id, valid, encrypted);
+ 	if (ret)
+ 		return ret;
+@@ -2038,6 +2044,7 @@
+ 	unsigned int tcont_index;
+ 	int ret;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_replace_service\n");
+ 	if (!service || service->multicast || service->vlan_treatment_valid ||
+ 	    service->direction == OMCI_GEM_PORT_DIRECTION_ANI_TO_UNI)
+ 		return -EOPNOTSUPP;
+@@ -2115,6 +2122,7 @@
+ 	struct xpon_priv *priv = hw_priv;
+ 	u16 gem_port_id;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_delete_service\n");
+ 	if (!airoha_eth_xpon_del_service(priv->gdm_dev, cookie,
+ 					  &gem_port_id))
+ 		return -ENOENT;
+@@ -2133,6 +2141,7 @@
+ {
+ 	struct xpon_priv *priv = hw_priv;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_set_uni\n");
+ 	dev_dbg(priv->dev, "OMCI UNI port %#x requested %s\n", entity_id,
+ 		enable ? "enabled" : "disabled");
+ 
+@@ -2148,6 +2157,7 @@
+ 	bool downstream_fec, upstream_fec;
+ 	int ret;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_get_telemetry\n");
+ 	if (!telemetry)
+ 		return -EINVAL;
+ 
+@@ -2973,6 +2983,7 @@
+ 	struct xpon_priv *priv = hw_priv;
+ 	int ret = 0;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_start\n");
+ 	if (READ_ONCE(priv->started))
+ 		return 0;
+ 
+@@ -3000,6 +3011,7 @@
+ {
+ 	struct xpon_priv *priv = hw_priv;
+ 
++	pr_info("M7-m trace: airoha_gpon_omci_hw_stop\n");
+ 	if (!READ_ONCE(priv->started))
+ 		return;
+ 
+diff -u -r a/net/xpon/omci/core.c b/net/xpon/omci/core.c
+--- a/net/xpon/omci/core.c	2026-10-12 07:26:21.826792183 +0000
++++ b/net/xpon/omci/core.c	2026-10-12 07:26:21.909200201 +0000
+@@ -181,6 +181,7 @@
+ 	void *hdr;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_get\n");
+ 	mutex_lock(&omci_devices_lock);
+ 	odev = omci_get_from_info(info);
+ 	if (!odev) {
+@@ -224,6 +225,7 @@
+ 	struct omci_device *odev;
+ 	int ret = 0;
+ 
++	pr_info("M7-m trace: omci_cmd_bind\n");
+ 	mutex_lock(&omci_devices_lock);
+ 	odev = omci_get_from_info(info);
+ 	if (!odev) {
+@@ -258,6 +260,7 @@
+ 	struct net *owner_net = NULL;
+ 	int ret = 0;
+ 
++	pr_info("M7-m trace: omci_cmd_unbind\n");
+ 	mutex_lock(&omci_devices_lock);
+ 	odev = omci_get_from_info(info);
+ 	if (!odev) {
+@@ -375,6 +378,7 @@
+ 	u32 tx_len;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_tx\n");
+ 	if (!pdu_attr)
+ 		return -EINVAL;
+ 
+@@ -702,6 +706,7 @@
+ 	u16 class_id;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_class_get\n");
+ 	if (!info->attrs[OMCI_ATTR_CLASS_ID])
+ 		return -EINVAL;
+ 	class_id = nla_get_u16(info->attrs[OMCI_ATTR_CLASS_ID]);
+@@ -728,6 +733,7 @@
+ 	u32 next_index;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_class_next\n");
+ 	if (info->attrs[OMCI_ATTR_INDEX])
+ 		index = nla_get_u32(info->attrs[OMCI_ATTR_INDEX]);
+ 
+@@ -753,6 +759,7 @@
+ 	u8 value;
+ 	int ret = 0;
+ 
++	pr_info("M7-m trace: omci_cmd_agent_set\n");
+ 	mutex_lock(&omci_devices_lock);
+ 	odev = omci_get_from_info(info);
+ 	if (!odev) {
+@@ -824,6 +831,7 @@
+ 	void *hdr;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_config_get\n");
+ 	if (!info->attrs[OMCI_ATTR_CONFIG_KEY])
+ 		return -EINVAL;
+ 	key = nla_get_u16(info->attrs[OMCI_ATTR_CONFIG_KEY]);
+@@ -870,6 +878,7 @@
+ 	u16 key;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_config_set\n");
+ 	if (!info->attrs[OMCI_ATTR_CONFIG_KEY] || !value)
+ 		return -EINVAL;
+ 	key = nla_get_u16(info->attrs[OMCI_ATTR_CONFIG_KEY]);
+@@ -903,6 +912,7 @@
+ 	u16 entity_id;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_mib_get\n");
+ 	if (!info->attrs[OMCI_ATTR_CLASS_ID] ||
+ 	    !info->attrs[OMCI_ATTR_ENTITY_ID])
+ 		return -EINVAL;
+@@ -936,6 +946,7 @@
+ 	struct omci_device *odev;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_mib_set\n");
+ 	if (!info->attrs[OMCI_ATTR_CLASS_ID] ||
+ 	    !info->attrs[OMCI_ATTR_ENTITY_ID])
+ 		return -EINVAL;
+@@ -976,6 +987,7 @@
+ 	u16 entity_id;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_mib_delete\n");
+ 	if (!info->attrs[OMCI_ATTR_CLASS_ID] ||
+ 	    !info->attrs[OMCI_ATTR_ENTITY_ID])
+ 		return -EINVAL;
+@@ -1001,6 +1013,7 @@
+ 	struct omci_device *odev;
+ 	int ret = 0;
+ 
++	pr_info("M7-m trace: omci_cmd_mib_reset\n");
+ 	mutex_lock(&omci_devices_lock);
+ 	odev = omci_get_from_info(info);
+ 	if (!odev) {
+@@ -1023,6 +1036,7 @@
+ 	u32 next_index;
+ 	int ret;
+ 
++	pr_info("M7-m trace: omci_cmd_mib_next\n");
+ 	if (info->attrs[OMCI_ATTR_INDEX])
+ 		index = nla_get_u32(info->attrs[OMCI_ATTR_INDEX]);
+ 

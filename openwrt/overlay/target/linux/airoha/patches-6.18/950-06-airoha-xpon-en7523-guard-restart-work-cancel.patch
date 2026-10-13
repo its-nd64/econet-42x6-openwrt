@@ -1,0 +1,13 @@
+diff -u -r a/drivers/net/ethernet/airoha/airoha_xpon.c b/drivers/net/ethernet/airoha/airoha_xpon.c
+--- a/drivers/net/ethernet/airoha/airoha_xpon.c	2026-10-12 18:27:20.729913053 +0000
++++ b/drivers/net/ethernet/airoha/airoha_xpon.c	2026-10-12 18:27:20.741165007 +0000
+@@ -3038,7 +3038,8 @@
+ 		return;
+ 
+ 	WRITE_ONCE(priv->started, false);
+-	cancel_delayed_work_sync(&priv->restart_work);
++	if (current_work() != &priv->restart_work.work)
++		cancel_delayed_work_sync(&priv->restart_work);
+ 	if (priv->sfp_bus && READ_ONCE(priv->optical_active)) {
+ 		sfp_upstream_stop(priv->sfp_bus);
+ 	} else {

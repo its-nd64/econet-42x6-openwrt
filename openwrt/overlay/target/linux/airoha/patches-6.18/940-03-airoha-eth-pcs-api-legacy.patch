@@ -1,0 +1,40 @@
+diff -ruN a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
+--- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-10 18:37:47.579203757 +0000
++++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-10 18:37:47.601650040 +0000
+@@ -5237,8 +5237,13 @@
+ {
+ 	struct device *dev = config->dev;
+ 
++	/*
++	 * 42X6 (patch 940-03): the OpenWrt 9b95be9 tree carries an EARLIER
++	 * version of the multi-PCS series -- fwnode_phylink_pcs_parse() takes
++	 * the PCS count BY VALUE (not a pointer to fill in) and RETURNS the
++	 * number of PCS loaded.
++	 */
+ 	return fwnode_phylink_pcs_parse(dev_fwnode(dev), available_pcs,
+-					&num_possible_pcs);
++					num_possible_pcs);
+ }
+ 
+ static int airoha_setup_phylink(struct net_device *netdev)
+@@ -5280,11 +5285,15 @@
+ 					   MAC_10 | MAC_100 | MAC_1000 |
+ 					   MAC_2500FD | MAC_5000FD | MAC_10000FD;
+ 
+-		err = fwnode_phylink_pcs_parse(dev_fwnode(config->dev), NULL,
+-					       &dev->phylink_config.num_available_pcs);
+-		if (err)
+-			return err;
+-
++		/*
++		 * 42X6 (patch 940-03): the fork's later version calls
++		 * fwnode_phylink_pcs_parse(..., &config->num_available_pcs);
++		 * this tree has no num_available_pcs field, so count separately
++		 * with fwnode_phylink_pcs_count() and store into num_possible_pcs
++		 * (same as the 128758-byte baseline of this tree).
++		 */
++		config->num_possible_pcs =
++			fwnode_phylink_pcs_count(dev_fwnode(config->dev));
+ 		config->fill_available_pcs = airoha_fill_available_pcs;
+ 
+ 		__set_bit(PHY_INTERFACE_MODE_SGMII,
