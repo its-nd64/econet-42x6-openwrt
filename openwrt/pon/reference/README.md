@@ -26,3 +26,14 @@ done
 The patches in `../patches/` were authored for this project. The files in
 `../reference/` are third-party patches kept for comparison; their filenames
 carry a `ref-` prefix to keep them apart from the ones we apply.
+
+## Retired first-generation hooks (kept for history)
+
+`010`/`011` (net Kconfig/Makefile), `020`/`021` (drivers/net optical
+Kconfig/Makefile) and `032`/`033` (airoha Kconfig/Makefile) were the
+first-generation xPON hook patches, applied by hand to a prepared kernel
+tree. They are superseded by the route-A series in
+`../../overlay/target/linux/airoha/patches-6.18/` (`930-55`..`930-58` carry
+the same hunks; `930-53`/`930-54` carry the optical pair), which OpenWrt
+applies by itself during the build. They are kept here so the history stays
+readable, but nothing applies them anymore.
