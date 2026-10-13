@@ -9,13 +9,17 @@
 # instead of quietly producing a broken image.
 #
 # What it does:
-#   1. applies openwrt/patches/*.patch   (edits to existing upstream files)
-#   2. copies  openwrt/overlay/.         (new files: board DTS, kernel patches,
-#                                         mt76 package patches, base-files
-#                                         overlay, diagnostic kernel modules)
+#   1. applies openwrt/patches/*.patch   (edits to existing upstream files;
+#                                         0007-* selects the xPON symbols)
+#   2. copies  openwrt/overlay/.         (new files: board DTS, kernel patches
+#                                         incl. the route-A xPON series, mt76
+#                                         package patches, base-files overlay,
+#                                         diagnostic kernel modules)
 #   3. optionally copies openwrt/dbg/... (--with-mt76-debug, one diagnostic
 #                                         mt76 patch that must NOT ship)
-#   4. optionally runs openwrt/pon/apply-pon.sh   (--with-pon, stage 2)
+#   4. always runs openwrt/pon/apply-pon.sh (route-A stub: airoha_wed.h) and
+#      openwrt/omci/apply-omci.sh (omci-agent + luci-app-omci, UAPI sync).
+#      --with-pon is kept as an accepted no-op for backwards compatibility.
 #
 # It is idempotent: re-running it on an already-patched tree succeeds.
 #
@@ -175,14 +179,18 @@ if [ "$WITH_MT76_DEBUG" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (3) Optional stage 2 (xPON / optical).  NOT functional yet -- see
-#     docs/pon-port.md and openwrt/pon/README.md.
+# (3) Route-A PON + OMCI userspace.  Always applied: the kernel patch series
+#     in overlay/patches-6.18 (930-55..60, 940-01..06, 950-xx) needs the
+#     airoha_wed.h stub from openwrt/pon/overlay/ to compile, so gating it
+#     behind --with-pon would leave a broken tree.  --with-pon is kept as an
+#     accepted no-op flag for backwards compatibility with scripts and docs.
 # ---------------------------------------------------------------------------
-if [ "$WITH_PON" = "1" ]; then
-	echo
-	echo "==> stage 2 PON patches (--with-pon)"
-	bash "$REPO/openwrt/pon/apply-pon.sh" "$OWRT"
-fi
+echo
+echo "==> route-A PON overlay (airoha_wed.h stub)"
+bash "$REPO/openwrt/pon/apply-pon.sh" "$OWRT"
+echo
+echo "==> OMCI userspace (omci-agent + luci-app-omci, UAPI sync)"
+bash "$REPO/openwrt/omci/apply-omci.sh" "$OWRT"
 
 cat <<EOF
 

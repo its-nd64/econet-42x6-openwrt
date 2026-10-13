@@ -1,0 +1,141 @@
+diff --git a/target/linux/airoha/en7523/config-6.18 b/target/linux/airoha/en7523/config-6.18
+index b9e8390..b87f0f3 100644
+--- a/target/linux/airoha/en7523/config-6.18
++++ b/target/linux/airoha/en7523/config-6.18
+@@ -346,7 +346,10 @@ CONFIG_NET_DSA_MT7530=y
+ # CONFIG_NET_DSA_MT7530_MDIO is not set
+ CONFIG_NET_DSA_MT7530_MMIO=y
+ CONFIG_MEDIATEK_GE_SOC_PHY=y
+-# CONFIG_PCS_AIROHA_EN7523 is not set
++# Enabled by 0007 (route A, 2026-10-11): the EN7523 PCS was added by patch
++# 930-46 and ported to this kernel's fwnode PCS API by 940-06, so it can be
++# turned on.  Needs the pon_pcs device-tree node on this board.
++CONFIG_PCS_AIROHA_EN7523=y
+ #
+ # --- interactive-prompt guard ----------------------------------------------
+ # The symbols below have a prompt but no default value, so a non-interactive
+@@ -389,3 +392,22 @@ CONFIG_EN7571_PHY=y
+ CONFIG_EN7570_PHY=n
+ CONFIG_EN7572_PHY=n
+ CONFIG_GN25L95_PHY=n
++
++# ---------------------------------------------------------------------------
++# Route A xPON stack (M5+, 2026-10-11): five tristates from patches
++# 930-55..60 + 940-01..06 + 950-xx.
++#
++# All are =m and all five are named here even though AIROHA_XPON_V1 selects
++# the others: a symbol with a prompt and no default makes a non-interactive
++# kernel syncconfig stop with "Error 1" (same trap as XPON itself in 2026-10).
++# A =m symbol only reaches the rootfs when a kmod package is declared for it
++# (see the KernelPackage blocks in 0007's modules.mk part).
++# CONFIG_SFP is *not* enabled: the six sfp_bus_*/sfp_upstream_* symbols that
++# airoha-xpon.ko references live in vmlinux (EXPORT_SYMBOL_GPL), and the
++# module's own modinfo lists no dependency beyond the five packages below.
++# ---------------------------------------------------------------------------
++CONFIG_XPON=m
++CONFIG_XPON_OMCI=m
++CONFIG_XPON_OAM=m
++CONFIG_PHY_AIROHA_XPON=m
++CONFIG_AIROHA_XPON_V1=m
+diff --git a/target/linux/airoha/modules.mk b/target/linux/airoha/modules.mk
+index 6120624..78ef6db 100644
+--- a/target/linux/airoha/modules.mk
++++ b/target/linux/airoha/modules.mk
+@@ -103,3 +103,97 @@ define KernelPackage/airoha-lddla/description
+ endef
+ 
+ $(eval $(call KernelPackage,airoha-lddla))
++
++# ---------------------------------------------------------------------------
++# Route A xPON stack (M5+, 2026-10-11): five kmod packages for the modules
++# added by patches 930-55..60 + 940-01..06.
++#
++# OpenWrt generates a kmod-* package only for symbols declared in a KernelPackage
++# block; without these, the CONFIG_*=m symbols compile the .ko files but no
++# package installs them into the rootfs -- the same trap documented for
++# kmod-i2c-mt7621 in 0005.  DEPENDS values below were read from the modinfo of
++# the actually built modules, not guessed.
++# ---------------------------------------------------------------------------
++
++define KernelPackage/xpon
++  SUBMENU:=$(OTHER_MENU)
++  TITLE:=xPON subsystem core (sysfs/genl/LED)
++  KCONFIG:=CONFIG_XPON
++  FILES:=$(LINUX_DIR)/net/xpon/xpon.ko
++  AUTOLOAD:=$(call AutoProbe,xpon)
++endef
++
++define KernelPackage/xpon/description
++ Core of the in-kernel xPON subsystem: device model plus the sysfs and
++ generic-netlink interfaces that LuCI reads (/sys/class/xpon/*).
++endef
++
++$(eval $(call KernelPackage,xpon))
++
++define KernelPackage/xpon-omci
++  SUBMENU:=$(OTHER_MENU)
++  TITLE:=xPON OMCI agent (G.988 ME stack)
++  DEPENDS:=+kmod-xpon
++  KCONFIG:=CONFIG_XPON_OMCI
++  FILES:=$(LINUX_DIR)/net/xpon/omci/omci.ko
++  AUTOLOAD:=$(call AutoProbe,omci)
++endef
++
++define KernelPackage/xpon-omci/description
++ OMCI (ITU-T G.988) management stack for xPON: managed-entity database,
++ profiles, identity and the OMCI generic-netlink family used by
++ omci-agent/luci-app-omci.
++endef
++
++$(eval $(call KernelPackage,xpon-omci))
++
++define KernelPackage/xpon-oam
++  SUBMENU:=$(OTHER_MENU)
++  TITLE:=xPON IEEE 802.3ah OAM (EPON)
++  DEPENDS:=+kmod-xpon
++  KCONFIG:=CONFIG_XPON_OAM
++  FILES:=$(LINUX_DIR)/net/xpon/oam/xpon-oam.ko
++  AUTOLOAD:=$(call AutoProbe,xpon-oam)
++endef
++
++define KernelPackage/xpon-oam/description
++ IEEE 802.3ah (EFM) OAM for the EPON mode of the xPON subsystem.  Needs patch
++ 930-60: the community branch ships no MODULE_LICENSE in net/xpon/oam/*, so
++ without it a modular build fails at modpost.
++endef
++
++$(eval $(call KernelPackage,xpon-oam))
++
++define KernelPackage/phy-airoha-xpon
++  SUBMENU:=$(OTHER_MENU)
++  TITLE:=Airoha EN7523 xPON PHY (GPON/EPON SERDES)
++  KCONFIG:=CONFIG_PHY_AIROHA_XPON
++  FILES:=$(LINUX_DIR)/drivers/phy/airoha/phy-airoha-xpon.ko
++  AUTOLOAD:=$(call AutoProbe,phy-airoha-xpon)
++endef
++
++define KernelPackage/phy-airoha-xpon/description
++ PHY driver for the EN7523 PON SERDES: GPON overhead/bit-delay/BIP, TX
++ calibration and link state.  Exposes the airoha_xpon_phy_* symbols consumed
++ by the airoha-xpon MAC driver.
++endef
++
++$(eval $(call KernelPackage,phy-airoha-xpon))
++
++define KernelPackage/airoha-xpon
++  SUBMENU:=$(OTHER_MENU)
++  TITLE:=Airoha EN7523 xPON MAC (GPON/EPON + PLOAM + OMCI)
++  DEPENDS:=+kmod-xpon +kmod-xpon-omci +kmod-xpon-oam +kmod-phy-airoha-xpon +kmod-optical-frontend
++  KCONFIG:=CONFIG_AIROHA_XPON_V1
++  FILES:=$(LINUX_DIR)/drivers/net/ethernet/airoha/airoha-xpon.ko
++  AUTOLOAD:=$(call AutoProbe,airoha-xpon)
++endef
++
++define KernelPackage/airoha-xpon/description
++ EN7523 xPON MAC driver: GPON/EPON state machines, PLOAM, GEM/T-CONT service
++ table and the GPON OMCI transport.  Requires the route-A hooks in airoha_eth
++ (patches 940-01..05); it probes from a device-tree node, so it stays idle
++ until a PON node exists.
++endef
++
++$(eval $(call KernelPackage,airoha-xpon))

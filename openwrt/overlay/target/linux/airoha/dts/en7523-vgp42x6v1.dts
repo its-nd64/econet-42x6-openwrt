@@ -114,6 +114,21 @@
 			compatible = "airoha,en7571";
 			reg = <0x70>;
 			firmware-name = "airoha/en7571_bob.bin";
+
+			/*
+			 * MANDATORY for this node to act as an optical frontend
+			 * *provider*: optical/core.c devm_optical_frontend_get_optional()
+			 *     -> fwnode_property_get_reference_args(fwnode,
+			 *           "optical-frontends",
+			 *           "#optical-frontend-cells", 0, index, &args);
+			 *     if (ret) { if (ret == -ENOENT) return NULL;
+			 *                return ERR_PTR(ret); }   <- -EINVAL
+			 * Without this property the lookup returns -EINVAL (not
+			 * -EPROBE_DEFER), so airoha_xpon_probe() takes the "failed to
+			 * get optical frontend" branch -> "error on register xPON MAC"
+			 * -> the whole xPON stack is torn down.
+			 */
+			#optical-frontend-cells = <0>;
 		};
 	};
 
@@ -338,6 +353,29 @@
 };
 
 / {
+	/*
+	 * (C3) SCU register window (0x1fb00000) -- mandatory for the PON driver.
+	 *
+	 * The en7523.dtsi `scu:` node merges TWO regions:
+	 *     reg = <0x1fa20000 0x400>, <0x1fb00000 0x1000>;
+	 * but syscon only takes reg[0] (of_syscon_register -> of_address_to_resource
+	 * (np, 0)), so the regmap has max_register = 0x3fc. Consequence: every
+	 * `airoha-xpon` access to RST_CTRL2 (0x830) / RST_CTRL1 (0x834) -- which live
+	 * at 0x1fb00830/0x1fb00834 -- is SILENTLY REFUSED by regmap: writes have no
+	 * effect and reads keep returning stack garbage.
+	 *
+	 * The community tree solves it by SPLITTING into two nodes (chip_scu at
+	 * 0x1fa20000 and scuclk at 0x1fb00000) and pointing every consumer at
+	 * `airoha,scu = <&scuclk>`. Here the minimal version: one extra syscon node
+	 * for the 0x1fb00000 register window only, referenced by the two PON nodes
+	 * (see en7523-vgp42x6v1-pon.dtsi). The compatible is deliberately NOT
+	 * "airoha,en7523-scu" so the clock/reset driver does not probe twice.
+	 */
+	scu_reg: syscon@1fb00000 {
+		compatible = "airoha,en7523-scu-regs", "syscon";
+		reg = <0x1fb00000 0x1000>;
+	};
+
 	system-controller@1fbf0200 {
 		compatible = "syscon", "simple-mfd";
 		/* >= 0x98 (irq_edge/level up to 0x94) and covers LAN_LED1_MAPPING 0x7c.
@@ -562,11 +600,62 @@
 		};
 
 		/*
-		 * 0x6900000-0x8000000 (23 MB) = vendor raw area, not part of any mtd:
-		 *   0x6F00000 factory block (GPON serial @+0x2BC, BOB laser @+0x497)
-		 *   0x6FC0000 byte '1' (meaning unknown)
-		 *   0x75E0000 'RAWB', 0x7FE0000 'BMT'
-		 * -> no partition declared, never written. To read it, use mtd raw or leave it for later.
+		 * 0x6900000-0x8000000 (23 MB) = vendor raw area. Only the start of
+		 * it is declared below (the read-only "bob" factory block, whose
+		 * GPON serial cell the OMCI stack reads); the rest stays
+		 * undeclared and is never written.
 		 */
+
+		/*
+		 * "bob": the vendor factory block. READ-ONLY, never written.
+		 *
+		 * Why it exists: the OMCI block (net/xpon/omci/identity.c) takes
+		 * the GPON serial ONLY through the nvmem cell named
+		 * "gpon-serial-number". Without the cell it falls back to
+		 * gpon_random_serial_number() and the serial changes on every
+		 * boot (measured twice). drivers/mtd/mtdcore.c registers an
+		 * nvmem provider for a partition exactly when it carries
+		 * "compatible = nvmem-cells", and the cell name follows the node
+		 * name, so the child must be named `gpon-serial-number@2bc`.
+		 * (The tclinux_slave partition already uses compatible "denx,fit"
+		 * and still works, so a non-"fixed-partitions" compatible does not
+		 * drop the partition.)
+		 *
+		 * Why 0x6F00000 + 0x20000: the SPI-NAND is 128 MiB with a 128 KiB
+		 * (0x20000) erase block, so a partition must be erase-block
+		 * aligned, and 0x6F00000 is already aligned. The area sits outside
+		 * every old partition, so sysupgrade never writes there.
+		 *
+		 * The 12 bytes at +0x2BC are the unit serial (4 vendor characters
+		 * + 8 hex digits, the shape omci_normalize_serial() handles in its
+		 * own branch). The value is per-unit data and is NOT published in
+		 * this repository -- the node only says where the driver looks.
+		 */
+		partition@6f00000 {
+			label = "bob";
+			reg = <0x6F00000 0x20000>;
+			read-only;
+
+			compatible = "nvmem-cells";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			gpon_serial: gpon-serial-number@2bc {
+				reg = <0x2BC 0xC>;
+			};
+		};
 	};
 };
+
+/*
+ * ------------------------------------------------------------------
+ * PON block (gdm2 + xpon + xpon_phy + pon_pcs)
+ * ------------------------------------------------------------------
+ * MUST be at the END of the file: the included file references `&eth`
+ * (the label defined above), so it cannot be included earlier.
+ *
+ * Deliberate isolation: if the optical block ever breaks booting or the
+ * driver, removing exactly this one include line returns the tree to the
+ * Ethernet/switch state -- no other node has to change.
+ */
+#include "en7523-vgp42x6v1-pon.dtsi"

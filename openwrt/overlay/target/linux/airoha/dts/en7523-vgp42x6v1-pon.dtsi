@@ -1,122 +1,325 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /*
- * vGP-42X6V1 -- PON overlay (stage 2), included from en7523-vgp42x6v1.dts:
+ * vGP-42X6V1 -- PON overlay (route A), included at the END of en7523-vgp42x6v1.dts:
  *
  *     #include "en7523-vgp42x6v1-pon.dtsi"
  *
- * Only include this after applying the PON patches (pon/apply-pon.sh) and after porting
- * the xPON hook into airoha_eth.c, otherwise the DTS fails to compile (no bindings/driver).
+ * Must be included last: the `&eth { gdm2 ... }` block below needs the `eth`
+ * label that only the board DTS defines (the OpenWrt en7523.dtsi has no eth node).
  *
- * All figures come from the stock DT and the live state of the unit (see docs/econet/42X6_*):
- *   xpon@1fb64000      reg 0x1fb64000+0x3e8, 0x1fb66000+0x23c   IRQ 42 (mac) + 34 (dying-gasp)
- *   pon_phy@1faf0000   reg 0x1faf0000+0x800, 0x1fa2ff24+4,
- *                         0x1faf3000+0xfff, 0x1faf4000+0xfff   IRQ 43
- *   pon_hsgmii@1fa65000 reg 0x1fa65100+0x4a0, 0x1fa65a00+0x1ac,
- *                           0x1fa65e00+0x64, 0x1fa66000+0xdc    IRQ 66
+ * Everything below is justified by what the drivers actually read -- not by
+ * copying the community tree (whose nodes reference labels that do not exist
+ * in this tree):
+ *
+ *   airoha_xpon_probe()          drivers/net/ethernet/airoha/airoha_xpon.c:4233
+ *     - data = device_get_match_data()     -> compatible "airoha,en7523-xpon"
+ *     - syscon_regmap_lookup_by_phandle("airoha,scu")  MANDATORY
+ *     - devm_reset_control_get_optional_exclusive("mac")  (optional)
+ *     - devm_phy_get("xpon")               MANDATORY (phys/phy-names)
+ *     - of_parse_phandle("ethernet")      optional; present means no auto-probe
+ *     - platform_get_resource_byname("mac") + resource_size >= V1_XPON_REGION_SIZE
+ *       = 0x10000 (airoha_xpon.h:21)      -> reg must be 0x10000 or larger
+ *     - platform_get_irq_byname("mac"); dying-gasp is optional (:4049)
+ *     - priv->mode = AIROHA_XPON_MODE_GPON  (hardcoded; there is no
+ *       "airoha,pon-mode" property at this milestone -- do not add one)
+ *
+ *   airoha_xpon_phy_probe()      drivers/phy/airoha/phy-airoha-xpon.c:1269
+ *     - platform_get_resource(..., 0)    -> only reg[0] is mapped
+ *     - devm_reset_control_get_exclusive("phy")  MANDATORY (not optional)
+ *     - no IRQ, no pinctrl, no other property is read
+ *
+ *   airoha_setup_phylink()       drivers/net/ethernet/airoha/airoha_eth.c:5252
+ *     - of_get_phy_mode() failing means "incorrect phy-mode", so GDM2 must
+ *       declare a phy-mode.
+ *     - GDM2 declares `phy-mode = "2500base-x"` + `pcs-handle = <&pon_pcs>`
+ *       so the real PCS/PMA programs the optical SERDES (the earlier M6 value
+ *       "internal" took the no-PCS branch while CONFIG_PCS_AIROHA_EN7523 was
+ *       still off).
+ *     - no fixed-link is declared: phylink_of_phy_connect() then returns
+ *       -ENODEV, which is exactly the "no PHY or fixed-link, using xPON link
+ *       state" path (:3168) -- the AIROHA_PRIV_F_XPON_MANAGED flag is set by
+ *       airoha_eth_register_xpon().
+ *
+ *   airoha_eth_get_xpon_netdev() looks for the netdev whose port->id ==
+ *   AIROHA_GDM2_IDX (:178), so a gdm2 node is MANDATORY -- without it xpon
+ *   defers its probe forever.
+ *
+ *   GPON identity: exactly ONE property is read from the DT here --
+ *   "omci-vendor-id" (net/xpon/omci/identity.c:382). The serial comes from an
+ *   nvmem cell (see the "bob" partition in the board DTS); serial,
+ *   equipment-id and software versions have no DT property and belong to
+ *   userspace (/etc/config/omci, ubus omci.agent).
+ *
+ * reg/IRQ figures come from the vendor DT of this board family and were
+ * cross-checked against the community en7523.dtsi (xpon@1fb60000,
+ * xpon_phy@1faf0000).
  */
 
-/* PON MAC -- matches the community tree xmac@1fb60000 node, but keeps the stock 42X6 numbers */
-xpon: xmac@1fb60000 {
-	compatible = "airoha,en7523-xpon";
-	reg = <0x1fb60000 0x10000>,	/* GPON at +0x4000, EPON at +0x6000 */
-	      <0x1fa2ff24 0x4>;		/* tx-off */
-	reg-names = "mac", "tx-off";
+/* -------------------------------------------------------------------------
+ * GDM2 -- the MAC port attached to the PON block (not to GDM1's switch)
+ * ---------------------------------------------------------------------- */
+&eth {
+	gdm2: ethernet@2 {
+		compatible = "airoha,eth-mac";
+		reg = <2>;
 
-	interrupt-parent = <&gic>;
-	interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>,	/* stock 0x2a */
-		     <GIC_SPI 34 IRQ_TYPE_LEVEL_HIGH>;	/* dying-gasp, stock 0x22 */
-	interrupt-names = "mac", "dying-gasp";
+		/*
+		 * "2500base-x" selects the en7523_pcs_pon_serdes_2500basex_init()
+		 * branch added by patch 930-47 (patch 930-51 covers the
+		 * 1000Base-X rate fallback). The value was "internal" before the
+		 * PCS was enabled because airoha_setup_phylink() only takes the
+		 * no-PCS branch without pcs-handle. Modelled on
+		 * an7583.dtsi: gdm2 { pcs-handle = <&pon_pcs>; }.
+		 */
+		phy-mode = "2500base-x";
+		pcs-handle = <&pon_pcs>;
 
-	resets = <&scu EN7523_XPON_MAC_RST>;		/* bit 41 -- OpenWrt already has the define */
-	phys = <&xpon_phy>;
-	phy-names = "xpon";
-	airoha,scu = <&scu>;
-	ethernet = <&gdm2>;				/* needs the xPON hook in airoha_eth.c */
-	airoha,pon-mode = "gpon";			/* stock runs GPON (BOB profile 0x07) */
+		/*
+		 * Behavioural, not just a flag: airoha_eth.c reads this property
+		 * at probe to set AIROHA_PRIV_F_XPON_MANAGED *and* to strip
+		 * AIROHA_XPON_TX_OFFLOAD_FEATURES from netdev->features. The
+		 * driver's own comment is explicit: leaving generic TX offload on
+		 * "stalls GPON TX after the first few MiB".
+		 * airoha_eth_register_xpon() sets the flag too but does NOT strip
+		 * the offload, so omitting this property loses the important part.
+		 */
+		airoha,xpon-managed;
 
-	/*
-	 * GPON identity of the unit (read live: tcapi show GPON + live romfile):
-	 *   SerialNumber = <unit serial>   VendorId = first 4 characters of the serial
-	 *   EquipmentId  = vGP-42X6V1     Version  = VGP42X6M001     Password = empty
-	 * Do NOT use airoha,gpon-serial-from-mac (the serial does not follow from the MAC).
-	 * The omci-serial-number / omci-vendor-id values below are PLACEHOLDERS: replace
-	 * them with the unit's own values (vendor id = first four characters of the serial).
-	 */
-	omci-serial-number = "XXXX00000000";
-	omci-vendor-id = "XXXX";
-	omci-version = "VGP42X6M001";
-	omci-equipment-id = "vGP-42X6V1";
+		/*
+		 * PLACEHOLDER: this MAC names the PON-side netdev only (it is not
+		 * the GPON L2 address). Without any mac-address the driver falls
+		 * back to eth_hw_addr_random() -- a new MAC on every boot. Write
+		 * your own board's address here; the address this support was
+		 * developed on is redacted. Keep the first octet 02: a unicast,
+		 * locally administered placeholder cannot collide with a
+		 * vendor-assigned assignment.
+		 */
+		mac-address = [02 00 00 00 00 00];
 
-	status = "okay";
-};
-
-/* PON PHY (SerDes + PMA) -- stock has IRQ 43, the community version lacks it */
-&scu {
-	#reset-cells = <1>;
-};
-
-xpon_phy: phy@1faf0000 {
-	compatible = "airoha,en7523-xpon-phy";
-	reg = <0x1faf0000 0x5000>,	/* stock declares 0x800; the two windows below exist in stock */
-	      <0x1faf3000 0x1000>,
-	      <0x1faf4000 0x1000>;
-	reg-names = "phy", "phy-ext0", "phy-ext1";
-
-	interrupt-parent = <&gic>;
-	interrupts = <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>;	/* stock 0x2b */
-
-	resets = <&scu EN7523_XPON_PHY_RST>;		/* bit 0 */
-	airoha,scu = <&scu>;
-	#phy-cells = <0>;
-	tx-disable-gpios = <&gpio0 16 GPIO_ACTIVE_HIGH>; /* led.conf: LED 42 -> gpio 16 (both polarities were tried) */
-
-	/*
-	 * WARNING: pinctrl -- the community version uses `pinctrl-0 = <&pon_pinctrl>` with a
-	 * system-controller@1fbf0200 node (syscon+simple-mfd) + "pon" group.
-	 * OpenWrt dts/en7523.dtsi does NOT have that node, so pick one of:
-	 *   (a) add a syscon+pinctrl node for EN7523 + a "pon" function in pinctrl-en7523.c
-	 *   (b) keep pinctrl optional in phy-airoha-xpon.c
-	 * so the line below is left commented out for now:
-	 */
-	/* pinctrl-names = "default"; pinctrl-0 = <&pon_pinctrl>; */
-
-	status = "okay";
-};
-
-/* PON PCS -- stock has IRQ 66; the community version declares no IRQ */
-pon_pcs: pcs@1fa08000 {
-	compatible = "airoha,en7523-pcs";
-	reg = <0x1fa60000 0x1000>,
-	      <0x1fa65100 0x4a0>,
-	      <0x1fa65a00 0x1ac>,
-	      <0x1fa65e00 0x64>,
-	      <0x1fa66000 0xdc>;
-
-	interrupt-parent = <&gic>;
-	interrupts = <GIC_SPI 66 IRQ_TYPE_LEVEL_HIGH>;	/* stock 0x42 */
-
-	resets = <&scu EN7523_XPON_MAC_RST>,
-		 <&scu EN7523_XPON_PHY_RST>;
-
-	status = "okay";
-};
-
-/*
- * Laser / BOSA -- NOT SETTLED YET (see gap analysis section 4.7):
- *  - live evidence: DDMI goes over the internal I2C of the PON PHY block
- *    (`/proc/pon_phy/debug` -> `phy_i2c_div_clock`); no /dev/i2c-* on the unit.
- *  - BOB already extracted: 0x6F00497, 256 B, magic 0x07050701 (GPON + EN7571).
- *  If the BOSA is on the SoC i2c0, uncomment the block below; if it sits behind the
- *  PHY, attach an optical frontend to the PHY per the community tree binding.
- */
-/*
-&i2c0 {
-	status = "okay";
-
-	en7571: lddla@70 {
-		compatible = "airoha,en7571";
-		reg = <0x70>;
-		firmware-name = "airoha/en7571_bob.bin";
+		status = "okay";
 	};
 };
-*/
+
+/*
+ * New top-level nodes must live inside `/ { ... }`: DTS does not allow nodes
+ * at the top level (only `&label { ... }` may stand alone). Missing these
+ * braces gives a dtc "syntax error" at the node name.
+ */
+/ {
+	/* -----------------------------------------------------------------
+	 * PON PHY block (EN7523 PON SERDES/PMA) -- 0x1faf0000
+	 * -------------------------------------------------------------- */
+	xpon_phy: phy@1faf0000 {
+		compatible = "airoha,en7523-xpon-phy";
+
+		/* Only reg[0] is mapped (platform_get_resource(..., 0)); 0x5000
+		 * covers every register the driver touches. */
+		reg = <0x1faf0000 0x5000>;
+
+		/*
+		 * MANDATORY (not optional): devm_gpiod_get(dev, "tx-disable",
+		 * GPIOD_OUT_HIGH) fails with -ENOENT without this property, and
+		 * then the PHY provider never registers, airoha_xpon defers
+		 * forever, /sys/class/xpon stays empty and OMCI answers -ENODEV.
+		 *
+		 * Internal pin 28 == GPIO row 16 (gpio-ranges maps row N to pin
+		 * N+12): the board's TX_DISABLE pad, and the first pad of the
+		 * driver's "pon" group (pon_pins = 28..33 after patch 202-29
+		 * removes nothing -- it removes pad 28 from the *pinctrl* group
+		 * to avoid the double-claim; see the pon_pinctrl note below).
+		 *
+		 * Polarity: the driver treats 1 as disabled and requests the line
+		 * fail-safe with GPIOD_OUT_HIGH
+		 * (gpiod_set_value_cansleep(gpio, !enable)), hence ACTIVE_HIGH.
+		 */
+		tx-disable-gpios = <&en7523_pinctrl 16 GPIO_ACTIVE_HIGH>;
+
+		/*
+		 * Routes the six PON pads to the optical block. The "pon"
+		 * function/group already exists in the pinctrl driver -- no kernel
+		 * patch needed:
+		 *   pon_pins[] = {28,29,30,31,32,33} with PINCTRL_PIN_GROUP("pon", pon),
+		 *   pon_groups[] = {"pon"} with PINCTRL_FUNC_DESC("pon", pon),
+		 *   pon_func_group -> AIROHA_FUNC_MUX, REG_GPIO_PON_MODE (SCU 0x0218).
+		 *
+		 * Why it must be declared here: the pinctrl driver clears 0x0218
+		 * (0 = GPIO) during its own probe, and the PHY driver deliberately
+		 * never sets that bit ("PON pad routing belongs to pinctrl...
+		 * cannot describe that split ownership." -- phy-airoha-xpon.c).
+		 * Without pinctrl-0 the PON pads are never routed to the optical
+		 * block.  Patch 202-29 removes pad 28 from the group so it can be
+		 * claimed as the TX-disable GPIO at the same time (measured:
+		 * "pin gpio16 already requested by 1faf0000.phy" -> -EINVAL before
+		 * the patch).
+		 */
+		pinctrl-names = "default";
+		pinctrl-0 = <&pon_pinctrl>;
+
+		/* MANDATORY: devm_reset_control_get_exclusive(dev, "phy") */
+		resets = <&scu EN7523_XPON_PHY_RST>;	/* bit 0 */
+		reset-names = "phy";
+
+		airoha,scu = <&scu_reg>;
+
+		#phy-cells = <0>;
+
+		status = "okay";
+	};
+
+	/* -----------------------------------------------------------------
+	 * PON MAC (xmac) -- 0x1fb60000; GPON at +0x4000, EPON at +0x6000
+	 * -------------------------------------------------------------- */
+	xpon: xmac@1fb60000 {
+		compatible = "airoha,en7523-xpon";
+
+		/*
+		 * resource_size("mac") must be >= 0x10000 (V1_XPON_REGION_SIZE)
+		 * -- exactly what is declared here. "tx-off" is the laser-off
+		 * register used on TX disable.
+		 */
+		reg = <0x1fb60000 0x10000>,
+		      <0x1fa2ff24 0x4>;
+		reg-names = "mac", "tx-off";
+
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>,	/* mac */
+			     <GIC_SPI 34 IRQ_TYPE_LEVEL_HIGH>;	/* dying-gasp */
+		interrupt-names = "mac", "dying-gasp";
+
+		/*
+		 * Kept as in the community reference (en7523.dtsi and the
+		 * askey_rtf8225vw board DTS): resets the MAC before a session is
+		 * started. Needs patch 202-30, which adds the .reset pulse to the
+		 * EN7523 clock/reset driver -- without it reset_control_reset()
+		 * returns -ENOTSUPP (-524) and the OMCI registration fails.
+		 */
+		resets = <&scu EN7523_XPON_MAC_RST>;	/* bit 41 */
+		reset-names = "mac";
+
+		phys = <&xpon_phy>;
+		phy-names = "xpon";
+
+		airoha,scu = <&scu_reg>;
+
+		/*
+		 * MANDATORY in practice: airoha_xpon_probe() calls
+		 * devm_optical_frontend_get_optional(dev, "pon") and then checks
+		 *     priv->sfp_bus = sfp_bus_find_fwnode(dev->fwnode);
+		 *     if (!priv->sfp_bus && !priv->frontend) {
+		 *             dev_err(dev, "missing SFP or optical frontend reference\n");
+		 *             ret = -ENODEV;   -> "error on register xPON MAC"
+		 *     }
+		 * This board has no SFP, so the probe must resolve an optical
+		 * frontend or the whole xPON stack is torn down (empty
+		 * /sys/class/xpon, OMCI answers -ENODEV). The name pair must use
+		 * the kernel-standard property names
+		 * (include/linux/optical_frontend.h), and the con_id MUST be
+		 * "pon" because that is the string the driver looks up. The
+		 * en7571 (LDDLA at 0x70 on i2c0) is the provider.
+		 */
+		optical-frontends = <&en7571>;
+		optical-frontend-names = "pon";
+
+		/* Datapath target netdev (airoha_eth_get_xpon_netdev() is the
+		 * fallback when this property is missing). */
+		ethernet = <&gdm2>;
+
+		/* ---------------------------------------------------------
+		 * GPON identity
+		 * ---------------------------------------------------------
+		 * (a) VENDOR -- the ONLY DT property the identity block reads:
+		 *     the properties[] table in net/xpon/omci/identity.c has just
+		 *     "omci-vendor-id". It has NO "omci-serial-number": the vendor
+		 *     DT of this board family declares one, but this driver never
+		 *     reads it, so do not declare it and expect it to work.
+		 *     PLACEHOLDER below: replace with the first four characters of
+		 *     your own unit's GPON serial.
+		 *
+		 * (b) SERIAL -- MANDATORY through the nvmem cell named
+		 *     "gpon-serial-number" (identity.c). Without the cell the code
+		 *     falls back to gpon_random_serial_number() and the serial
+		 *     changes on every boot (measured twice). The cell points at
+		 *     the read-only "bob" partition declared in the board DTS;
+		 *     the serial sits 0x2BC into the vendor factory block.
+		 *
+		 * Both live on the `xpon` node (and nowhere else) because
+		 * agent.c calls omci_identity_load(odev->parent, ...) -- the OMCI
+		 * device's parent IS xpon, which is where "omci-vendor-id" is
+		 * already read successfully.
+		 */
+		omci-vendor-id = "XXXX";
+		nvmem-cells = <&gpon_serial>;
+		nvmem-cell-names = "gpon-serial-number";
+
+		status = "okay";
+	};
+
+	/* -----------------------------------------------------------------
+	 * PON PCS/PMA -- 0x1fa60000
+	 * --------------------------------------------------------------
+	 * Why this node exists: `airoha_setup_phylink()` only takes the
+	 * no-PCS branch when a MAC port declares `phy-mode = "internal"` and
+	 * no pcs-handle. To let the real PCS/PMA program the optical SERDES
+	 * you need (a) CONFIG_PCS_AIROHA_EN7523 on -- proven regression-free
+	 * on hardware -- and (b) this node plus pcs-handle on gdm2.
+	 *
+	 * The five `reg-names` must match the en7523_pon_res[] array in
+	 * drivers/net/pcs/airoha/pcs-en7523.c exactly -- "pcs-mac", "pcs1",
+	 * "pcs2", "an", "rate-adapt" -- because the driver looks them up with
+	 * platform_get_resource_byname. Do NOT copy the example from the
+	 * airoha,en7523-pcs.yaml binding: it writes "pcs_mac" (underscores)
+	 * and is older than the driver. Addresses and sizes follow the PON
+	 * example in that same binding.
+	 *
+	 * No `resets` here even though the binding allows it: the driver uses
+	 * devm_reset_control_bulk_get_optional_exclusive(), so a missing reset
+	 * is silently skipped, but declaring them would fail -- the two resets
+	 * EN7523_XPON_MAC_RST / EN7523_XPON_PHY_RST are already held
+	 * *exclusive* by the `xpon` and `xpon_phy` nodes, so bulk_get would
+	 * return -EBUSY and kill the PCS probe. MAC/PHY reset stays with those
+	 * two nodes, as before.
+	 */
+	pon_pcs: pcs@1fa60000 {
+		compatible = "airoha,en7523-pcs-pon";
+
+		reg = <0x1fa60000 0x1000>,
+		      <0x1fa65100 0x4a0>,
+		      <0x1fa65a00 0x1ac>,
+		      <0x1fa65e00 0x64>,
+		      <0x1fa66000 0xdc>;
+		reg-names = "pcs-mac", "pcs1", "pcs2", "an", "rate-adapt";
+
+		/* syscon_regmap_lookup_by_phandle("airoha,scu") -- MANDATORY
+		 * (pcs-en7523.c). This is the SCU *syscon* (`&scu_reg`), not the
+		 * reset controller (`&scu`) -- same as xpon/xpon_phy. */
+		airoha,scu = <&scu_reg>;
+
+		#pcs-cells = <0>;
+
+		status = "okay";
+	};
+};
+
+/*
+ * -------------------------------------------------------------------------
+ * pinctrl state "pon" (for `pinctrl-0 = <&pon_pinctrl>` on xpon_phy)
+ * -------------------------------------------------------------------------
+ * The node must be a child of the pinctrl controller -- on the board DTS
+ * that is `en7523_pinctrl: pinctrl { ... }` inside
+ * system-controller@1fbf0200 (the label already exists; only the child is
+ * added here). The `function`/`groups` strings must match EXACTLY what the
+ * driver declares: PINCTRL_FUNC_DESC("pon", pon) and
+ * PINCTRL_PIN_GROUP("pon", pon).
+ *
+ * No `pins = "gpioN"` here: the "pon" group is a fixed six-pad group
+ * (pins 28..33, minus pad 28 after patch 202-29) defined by the driver, not
+ * a per-pad configurable group.
+ */
+&en7523_pinctrl {
+	pon_pinctrl: pon {
+		mux {
+			function = "pon";
+			groups = "pon";
+		};
+	};
+};
