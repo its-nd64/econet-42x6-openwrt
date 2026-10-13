@@ -609,3 +609,180 @@ Board was flashed over HTTP (`python -m http.server` on the PC, `uclient-fetch` 
 * `GPIO16` (TX-disable) is still unclaimed -- `/sys/kernel/debug/gpio` lists only gpio-0/1/6/7/10/27 -- so the dark state rests on the BOSA power-up and the PON MAC burst gate (not yet present). Fibre stays unplugged.
 
 The SFF-8472-shaped `0x60..0x7F` window that read all zero by hand now means something after init+BOB: temperature and voltage are readable and match the stock numbers. M3 step 2 is done; next is the xPON MAC/PCS/OMCI (M3 steps 3-4, `airoha_eth` + `pon_pcs` + `xpon`/`xpon_phy`).
+
+## 15. Route A: the xPON stack as a normal kernel patch series (2026-10-11)
+
+**State: builds clean, probes on hardware, link not up** `[hardware]` for the
+build and the probe; `[not verified]` for anything past that.
+
+The earlier plan (a hand-applied shim header plus six hook patches) is
+retired. Instead the xPON stack is ported the way OpenWrt expects: a patch
+series under `openwrt/overlay/target/linux/airoha/patches-6.18/` that the
+build applies by itself, plus symbol selection in `openwrt/patches/0007-*`.
+
+| Series | Contents |
+|---|---|
+| `930-55`..`930-60` | Kconfig/Makefile hooks for `net/xpon`, `drivers/net/ethernet/airoha` and `drivers/phy/airoha`, plus the missing `MODULE_LICENSE` in `net/xpon/oam` (without it `xpon-oam.ko` fails modpost; the fork builds it built-in, which hides the bug) |
+| `940-01` | `airoha_eth.c`/`.h`/`airoha_regs.h` brought to the community baseline `781502ce` -- the rewrite closest to this tree, so every existing OpenWrt patch still applies |
+| `940-02` | `airoha_npu_start()` shim: keeps caller semantics, does nothing (upstream loads NPU firmware in probe; the fork's split load is not ported) |
+| `940-03` | two multi-PCS hunks back-ported to this tree's earlier API (`fwnode_phylink_pcs_parse()` takes the count by value; no `num_available_pcs` field) |
+| `940-04` | PPE compat: dynamic `max_gdm_ports` loop and the 64-byte-FOE `flow_stats_update()` without the `meter` word |
+| `940-05` | five hook-contract deltas from the clone HEAD at the same commit as the xPON driver (`channel` on the OAM path, `mac_irq` in `xpon_link_ops`, `econet_*`/`airoha_*` id names with the old names kept as aliases) |
+| `940-06` | `pcs-en7523.c` ported to this tree's `devm_fwnode_pcs_add_provider()` API (the pattern already exists in `pcs-airoha-common.c`) |
+| `202-29`, `202-30` | prerequisites: TX-disable pad out of the `pon` pin group (section 16), reset-pulse op for the SCU reset controller |
+
+`airoha_eth.c` needs `airoha_wed.h`, which this kernel does not have; the
+file ships as a 58-line stub (forward declaration only -- nothing dereferences
+it) staged by `openwrt/pon/apply-pon.sh` into `target/linux/airoha/files/`.
+`CONFIG_NET_AIROHA_SOC_WED` stays off, so every WED call compiles to a no-op
+and no `mtk_wed` driver is pulled in.
+
+`openwrt/patches/0007-target-airoha-enable-xpon.patch` selects the symbols
+(`CONFIG_XPON`/`XPON_OMCI`/`XPON_OAM`/`PHY_AIROHA_XPON`/`AIROHA_XPON_V1` as
+modules, `CONFIG_PCS_AIROHA_EN7523` built-in) and declares five kmod packages
+so the modules land in the rootfs with autoload entries.
+
+**Measured result** `[hardware]`: `make target/linux/compile` exits 0 with
+zero modpost errors; seven modules link (`xpon.ko`, `omci.ko`,
+`xpon-oam.ko`, `airoha-xpon.ko`, `phy-airoha-xpon.ko`, `optical_frontend.ko`,
+`airoha_lddla.ko`); the image carries all seven plus autoload entries; after
+flashing, the modules self-load, `/sys/class/xpon` exists, `dmesg` shows no
+call trace/panic/WARNING across reboots, and the LAN path is unregressed
+(1 Gbps link, NAT uplink works).
+
+## 16. Wiring the stack to the board: device tree, pinctrl, reset (2026-10-12)
+
+With route A building, the driver still had nothing to probe: no PON nodes,
+no pinmux, no usable reset. Three changes closed that, all measured on the
+board:
+
+* **Board DT** (`en7523-vgp42x6v1.dts` + `-pon.dtsi`): GDM2 at 2500base-x
+  with `pcs-handle`, `xpon` / `xpon_phy` / `pon_pcs` / `pon_pinctrl` nodes,
+  `omci-vendor-id="XXXX"` and a placeholder MAC (`02:00:00:00:00:00`) --
+  real identity comes from the factory block (section 20), never from this
+  file. Three details each cost a boot to learn:
+  * `scu_reg: syscon@1fb00000` -- the existing `scu` syscon only maps its
+    first register range (`max_register=0x3fc`), while the xPON resets live
+    at `0x1fb00830`/`0x834`; the separate node exposes them, with a
+    compatible that avoids a double probe.
+  * `#optical-frontend-cells = <0>` on `en7571` -- mandatory; without it
+    `devm_optical_frontend_get_optional()` returns `-EINVAL` and the xPON
+    probe tears itself down.
+  * a read-only `bob` partition with a `gpon_serial` nvmem cell (offset
+    `0x2BC`, length `0xC`) -- the rest of the vendor raw area is deliberately
+    undeclared and never written.
+* **Pinctrl** (`202-29`): pin 28 dropped from the `pon` group. It is GPIO16,
+  the board-level TX-disable line, which the xPON PHY driver must claim as a
+  GPIO; muxing it to PON made the PHY probe fail with `-EINVAL` and left
+  `/sys/class/xpon` empty.
+* **Reset pulse** (`202-30`): the SCU reset controller had no `->reset()`
+  op, so every xPON probe died with `-ENOTSUPP`; the patch adds the
+  assert/delay/deassert pulse.
+
+The first probe then failed a new way: the GPON MAC window read back
+`0xdeadbeef` -- this SoC's bus pattern for an undecoded region. Ruled out on
+evidence: not the DT offset (inside the vendor-declared range), not a
+software sentinel (`gpon_read()` is `readl()`), not our reset pulse
+(identical with resets dropped), not the clock framework (no such clocks in
+`clk_summary`), while the PHY block at `0x1faf0000` read/wrote normally.
+Patch `950-01` replays the fork PCS driver's SCU sequence (SerDes/XSI clock
+reset, PON_MODE=SGMII, release XPON_MAC_RST) with before/after logging, so
+the next boot shows which step helped.
+
+## 17. OMCI userspace: the v13 vs v14 handshake (2026-10-11)
+
+The packages (`omci-agent` 0.9.1, `luci-app-omci` 0.9.2) are a verbatim copy
+of the community `Sirherobrine23/openwrt` tree @ `1b46c9c8` (head of
+openwrt#20104), GPL-2.0-only. `omci-agent` is **not** a kmod: it is `omci.so`,
+a native ucode binding that speaks Generic Netlink straight to the kernel,
+plus an rpcd backend, an `omcictl` CLI and default UCI config. No kernel
+patch is needed to build it -- but it must be *selected*
+(`CONFIG_PACKAGE_omci-agent=y`), or the build exits 0 having compiled
+nothing.
+
+First board test failed in a way that looked cosmetic and was not: `ubus
+call omci.agent family` reported kernel 14 / client 13, `compatible: false`,
+and every other method failed. The vendored header inside the package is v13;
+the kernel builds v14. The delta is +26/-1 lines with no attribute renumbered
+(`OMCI_ATTR_ONU_TYPE` appended at the end, new `omci_onu_type` enum,
+`OMCI_CONFIG_SOURCE_SYSFS`), so the ABI is compatible -- only the version
+handshake was wrong. The durable fix is `openwrt/omci/apply-omci.sh`: one
+canonical header in this repo, the vendored copy overwritten on every staging,
+and a hard failure if the kernel tree disagrees, so a mismatched pair can
+never be built again. After the fix: `compatible: true` `[hardware]`.
+
+Two operational traps from the same bring-up: `cp -a` from a Windows mount
+produces mode 0777, which travels into the `.apk`, and rpcd **silently
+skips** a world-writable ucode script -- the page dies while the build
+reports success. The script normalises modes to 755/644 and gates on them.
+
+`/etc/config/omci` ships with **empty** identity. Unit serials, passwords and
+MACs are provisioned on the device and never committed here.
+
+## 18. Safe bring-up: guards that keep every boot alive
+
+PON bring-up on this SoC can stall the bus with no timeout -- no console, no
+LAN, only a power cycle recovers. Three guards keep experiments survivable,
+all `[hardware]`:
+
+* **`xpon_stop_before_ploam`** (`950-05`): module parameter, default 1
+  (safe). Every boot completes normally even after a hung experiment; flip it
+  at runtime (`echo 0 > .../parameters/xpon_stop_before_ploam`, reload the
+  module) to run one experiment without reflashing.
+* **Undecoded-register guards** (`950-02`, `950-03`): `0x0408`
+  (`XPON_GPON_EXT_PREAMBLE`) is not decoded on EN7523 -- *any* access, read
+  or write, takes the SoC down, which is why booting with fibre connected
+  hung while a dark boot survived. Writes are skipped, reads return 0. The
+  TX FEC status registers (`0x021c`/`0x040c`) sit in the same undecoded block
+  and report `-EOPNOTSUPP` instead; that path is reached from OMCI telemetry,
+  which is why opening the LuCI OMCI page used to hang the board.
+* **Disable-path breadcrumbs** (`950-07`) plus a `restart_work` guard
+  (`950-06`): timestamped markers through `gpon_disable()` that exonerated
+  the teardown path during the hang hunt (section 19).
+
+## 19. First light: the boot-with-fibre hang, fixed (img61, 2026-10-12)
+
+With light on the fibre for the first time: RX power around -24 dBm at the
+BOSA, temperature/voltage readings sane, laser dark as designed. But booting
+with the fibre connected hung with no console output, while a dark boot
+survived -- the same signature as the `0x0408` stall, in a new place:
+`XPON_TRANS_STATUS` lives in the same undecoded `0x040x` block and is read
+from the LOS path once the PHY locks to downstream.
+
+Patch `950-08` derives LOS from `XPON_PHYSTA1_READY` instead (`sta1`
+`0x01180000` with light vs `0x01080000` without -- the READY bit already
+encodes "downstream usable") and never touches the stalling block. Image
+`img61` (sha256 `e0eafe39b21a39407ead52e1cb8e6abd2926b4e04ec3d0c1b50c97b40f6824fc`)
+**boots with the fibre connected**: `xPON PHY ready (ready=1 los=0)`, `GPON
+probe complete`, SSH answers, and with the safe default lifted the FSM runs
+`O1-initial -> O2-standby` (`state = discovery`) `[hardware]`.
+
+**Downstream is still unresolved** `[hardware]`: MAC IRQs 39/40 stay quiet
+and OMCI counters read zero. Next step is a read-only one: poll
+`GPON_DBG_RX_GTC_CNT` at `0x1fb64308`. If it counts, the MAC sees GTC frames
+and the problem is interrupt routing/masking (note the EN7523 gap: the
+`INT_STATUS` poll in `phy_link_work` is gated on a different SoC id, so
+nobody polls it here); if it stays zero, the GPON RX block is not armed yet.
+Either answer fits in one guarded patch following the `950-03`/`950-07`/
+`950-08` pattern.
+
+## 20. Identity: serial from flash, password empty, nothing per-unit in git
+
+* The GPON serial comes from the `gpon_serial` nvmem cell (section 16) --
+  the "serial changes every boot" failure is closed `[hardware]`.
+* The GPON password is **empty** on this unit (driver normalisation rules
+  plus three independent reads agree); the remaining identity fields still
+  show driver defaults until provisioned.
+* Rule, enforced by review not tooling: no per-unit serial, MAC, BOB blob,
+  binary or password is ever committed. Placeholders in this repo are
+  `02:00:00:00:00:00`, `omci-vendor-id="XXXX"` and empty UCI strings.
+
+## 21. What remains (the honest list)
+
+1. The `GPON_DBG_RX_GTC_CNT` read (section 19) -- one guarded patch, decides
+   IRQ routing vs RX arming.
+2. Downstream lock and the O2->O5 path -- needs a live OLT; no public source
+   has reached O5 on EN7523.
+3. OMCI MIB round-trip and OLT acceptance -- the M4 acceptance test, unchanged.
+4. Laser safety stays: bring-up dark (fibre unplugged) until the link is
+   understood; GPIO16 polarity still unconfirmed.

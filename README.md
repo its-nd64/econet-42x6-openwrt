@@ -3,9 +3,10 @@
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
 
-This is a work-in-progress port, not a finished product. **Ethernet, Wi-Fi and a
-persistent install work on real hardware; GPON and the optical front end do
-not.** Read [Status](#status) before you assume anything, and read
+This is a work-in-progress port, not a finished product. **Ethernet, Wi-Fi, a
+persistent install, the optical frontend and the xPON driver probe work on real
+hardware; the GPON link itself does not (O1->O2, downstream open).** Read
+[Status](#status) before you assume anything, and read
 [Five things that will bite you](#five-things-that-will-bite-you) before you
 build.
 
@@ -33,8 +34,13 @@ build.
 * A **base-files overlay**: `lib/upgrade/platform.sh`, which gives `sysupgrade`
   a partition to write to, and `etc/board.d/02_network`, which bridges the switch
   ports.
-* **Optional stage 2 xPON material** under `openwrt/pon/`: source inventory and
-  hook patches. None of it is applied by default and none of it works.
+* **Route-A xPON stack, applied by default** (`openwrt/pon/`, `openwrt/omci/`,
+  `openwrt/patches/0007-*`): the community xPON sources as a kernel patch
+  series (`930-55`..`930-60` hooks, `940-01`..`940-06` Ethernet/PCS port,
+  `950-01`..`950-08` EN7523 bring-up guards) plus the `omci-agent` /
+  `luci-app-omci` control plane. Builds 7 modules that self-load; the driver
+  probes and GPON reaches O1->O2, but downstream is unresolved. Unit identity
+  is redacted (placeholders in git, real serial from flash, empty password).
 * A **helper that writes a unit MAC into the default eeprom blob**
   ([`tools/mt7916_eeprom_mac.py`](tools/mt7916_eeprom_mac.py)), so a second board
   does not come up wearing the first board's address.
@@ -60,7 +66,7 @@ Everything that mutates the OpenWrt tree lives under [`openwrt/`](openwrt/).
 | Flash | SPI-NAND **Winbond W25N01K**, 128 MiB, 2048-byte pages, 128 KiB blocks |
 | Wi-Fi | MediaTek **MT7916** on PCIe (2.4 + 5 GHz), functions `14c3:7906` / `14c3:790a` |
 | Ethernet | 4x GbE through the internal MT7530 switch, driven by DSA in MMIO mode |
-| Optical | GPON BOSA + EN7571 laser driver -- **the laser responds on the SoC's I2C0 at `0x70`** (`i2cdetect -y -r 0`); the driver and hwmon are not written yet |
+| Optical | GPON BOSA + EN7571 laser driver -- **probes on the SoC's I2C0 at `0x70`**, DDMI temperature/voltage read and match stock, BOB loads |
 | Console | UART at 115200n8 |
 
 Full detail, including the SPI-NAND partition map and which regions must never be
@@ -74,8 +80,8 @@ written: [`docs/hardware.md`](docs/hardware.md).
 |---|---|---|
 | **M1** boot to userspace on real hardware | **done** | console, 512 MiB, 7 MTD partitions, both PCIe ports enumerate |
 | **M2** bring-up outside PON | **done** | LAN up (4x GbE), Wi-Fi up with a real client, a reboot keeps its configuration |
-| **M3** optical / PON PHY | **started** | the SoC's I2C0 is up and the EN7571 answers at `0x70`; the `en7571` driver, hwmon and the xPON/optical stack (32 of 34 objects compile) are still to be brought up |
-| **M4** GPON O5 + OMCI | not started | -- |
+| **M3** optical / PON PHY | **done** | `en7571` probes, hwmon reads bias/temperature, BOB loads |
+| **M4** GPON O5 + OMCI | **in progress** | route-A stack builds (7 modules, autoloaded), xPON probes, OMCI answers (`compatible: true`), FSM runs O1->O2 with fibre; downstream unresolved (MAC IRQs quiet, next: one read-only GTC-counter probe) |
 
 Proven working, on the board, from a clean boot:
 
@@ -95,12 +101,13 @@ Proven working, on the board, from a clean boot:
 
 Not working yet, and the reason why:
 
-* **GPON / optical.** The optical bus is no longer a guess: with `i2c0` and the `i2c-mt7621` driver
-  enabled, the EN7571 laser driver answers at `0x70`, so the frontend can be built as an `i2c0` child the
-  way the community trees do it. Still untouched: the `en7571` driver itself, its hwmon exposure, and the
-  xPON device tree nodes. The datapath is also blocked on an `airoha_eth.h` API mismatch: the community
-  header is not a superset of OpenWrt's, and swapping it in breaks the Ethernet driver that now works.
-  See [docs/pon-port.md](docs/pon-port.md) section 13.
+* **GPON link.** The xPON stack builds, probes and runs O1->O2 with fibre, but
+  downstream never resolves: MAC IRQs stay quiet and OMCI counters read zero.
+  Next is one read-only probe (`GPON_DBG_RX_GTC_CNT`). O5 needs a live OLT,
+  and no public source has reached it on EN7523. Bring-up stays dark (fibre
+  unplugged) until the link is understood; GPIO16 (laser TX-disable) polarity
+  is still unconfirmed. See [docs/pon-port.md](docs/pon-port.md) sections
+  15-21.
 * **Per-unit calibration.** The EFuse is blank, so Wi-Fi falls back to the
   default eeprom blob. The MAC address is no longer random -- a helper here
   writes a unit address into that blob -- but the real per-unit calibration in
@@ -250,7 +257,10 @@ openwrt/
     package/kernel/mt76/patches/            the three WLAN LED patches
     package/kernel/{pciedbg,ringwatch}/     diagnostic kernel modules
   dbg/              diagnostic patches for --with-mt76-debug, never shipped
-  pon/              stage 2 xPON material, NOT applied by default
+  pon/              route-A xPON staging (airoha_wed.h stub) + README
+  omci/             omci-agent + luci-app-omci + canonical UAPI + apply-omci.sh
+  patches/          applied with `git apply` to existing upstream files
+                    (0007-* selects the xPON symbols and kmod packages)
   optional-configs/ example files you can opt into, e.g. a pinned wireless config
 scripts/            pin.env, apply-overlay.sh, build-firmware.sh, packages.append
 imagebuilder/       build-image.sh + package list + first-boot overlay
@@ -289,13 +299,11 @@ docs/               hardware, Ethernet, LEDs, sysupgrade, PON and build document
   **PCS half was left asleep**: `930-46`..`930-51` add the SerDes/PCS layer that
   only optical needs, and they stay disabled
   (`# CONFIG_PCS_AIROHA_EN7523 is not set`).
-* The **xPON port itself is still blocked** on an `airoha_eth.h` API mismatch: the
-  community header (4805 lines) is not a superset of OpenWrt's (744 lines), so
-  swapping it in breaks `airoha_eth.c` and `airoha_ppe.c` -- the working Ethernet
-  driver and the new PON stack cannot share it as it stands. A first pass of the
-  ported xPON stack compiles **32 of 34 objects** clean against 6.18.54; the two
-  failures (`airoha_xpon.o`, `airoha_gpon_omci.o`) are missing API surface rather
-  than wrong code. See [`docs/pon-port.md`](docs/pon-port.md).
+* The **xPON port is route A and it probes**: the `940-01` hook patch brings
+  `airoha_eth` to the community baseline the working Ethernet driver still
+  applies against, `940-05` back-ports the five hook-contract deltas, and the
+  `950-xx` guards keep every boot alive. What does not work yet is the link,
+  not the build. See [`docs/pon-port.md`](docs/pon-port.md) sections 15-21.
 
 ## License
 

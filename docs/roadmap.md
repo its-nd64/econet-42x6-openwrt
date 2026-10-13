@@ -58,46 +58,34 @@ under a proprietary EcoNet header, so it is a reference and not a source), and t
 [`net/pon` RFC](https://lore.kernel.org/netdev/20261008143249.3439762-1-john@phrozen.org/) posted
 2026-10-08. [pon-port.md](pon-port.md) section 12 is the survey and the list of reusable pieces.
 
-## 1. The xPON and optical port (M3, then M4)
+## 1. The xPON and optical port (M3 done, M4 in progress)
 
 **Why first.** This is the only item that makes the board what it is; everything
 else on this page refines a router that already works.
 
-**Where the work stands** (measured in a compile harness, not estimated). Compiling
-the community sources object by object against this kernel (6.18.54) gives **32 of
-34 objects clean**: `net/xpon/**` 14/14 (including the in-kernel OMCI agent),
-`drivers/net/optical/**` 15/15, `phy-airoha-xpon.c` and `pcs-en7523.c`. The two
-failures (`airoha_xpon.o`, `airoha_gpon_omci.o`) fail **only** on `airoha_eth.h`:
-the community and OpenWrt `airoha_eth` drivers have diverged, and 17
-`airoha_eth_*xpon*()` hooks plus a set of types/enums and macros are missing (20 hooks in the
-community header as of 2026-10-08, so the count is still growing).
-Neither shortcut works -- the community header is not a superset (it breaks
-`airoha_eth.c` and `airoha_ppe.c`), and that driver wholesale compiles only 4 of its
-10 objects. One real API drift is already fixed: pcs-provider changed between 6.18.44
-and 6.18.54, so `pcs-en7523.c` needs `devm_fwnode_pcs_add_provider()`.
+**Where the work stands** `[hardware]`. M3 is done: `en7571` probes on `i2c0`
+at `0x70`, hwmon exposes temperature/voltage matching stock, BOB loads. M4
+moved to **route A**: the xPON stack is a normal kernel patch series
+(`930-55`..`930-60` hooks, `940-01`..`940-06` Ethernet/PCS port, `950-01`..
+`950-08` EN7523 bring-up guards), selected by `openwrt/patches/0007-*` and
+described by the board device tree. It builds clean (7 modules, zero modpost
+errors), the modules self-load, the driver probes, OMCI userspace answers
+(`compatible: true` after the v13/v14 handshake fix), the serial comes from
+the `gpon_serial` nvmem cell, and with fibre the FSM runs O1->O2 (`img61`
+boots with fibre connected after the LOS-from-READY fix). Full evidence:
+[pon-port.md](pon-port.md) sections 15-21.
 
 **Steps**
 
-1. Turn the per-object harness into a **link** harness: a shim header providing the
-   missing 17 hooks, types and macros with stub bodies, so the whole stack links
-   while the datapath hooks stay unimplemented. That separates "does it link" from
-   "does it work", the question the last attempt could not answer.
-2. Implement the hooks in `airoha_eth.c`: GEM port to netdev queue mapping, the OAM
-   transmit path, and the xPON control start/stop entry points.
-3. Bring up the optical side: the `en7571` laser driver and its hwmon exposure
-   first, then `phy-airoha-xpon.c` and the PON PHY.
-4. Close the device tree questions the stage 2 overlay lists as open: the `pon`
-   pinctrl group and whether the `xpon_phy` node needs more register windows.
-   ~~where the laser actually sits~~ **Settled on hardware 2026-10-08**: the EN7571 answers on the SoC's
-   own `i2c0` at address `0x70` (`i2cdetect -y -r 0` on image `img24`), so the "DDMI only exists on the
-   PON PHY block's internal I2C" reading of the vendor firmware is not the whole story -- see
-   [pon-port.md](pon-port.md) section 13. Still open: the GPIO 16 laser-disable polarity.
-5. Only then M4: the O5 state machine and the OMCI agent's MIB round-trip, using the
-   identity from the factory partition.
+1. One read-only probe: poll `GPON_DBG_RX_GTC_CNT` at `0x1fb64308`. Counting
+   means the MAC sees GTC frames and the fault is IRQ routing/masking; zero
+   means the GPON RX block is not armed. Fits in one guarded patch.
+2. Downstream lock and the O2->O5 path -- needs a live OLT; no public source
+   has reached O5 on EN7523.
+3. OMCI MIB round-trip and OLT acceptance using the factory identity.
 
-**Acceptance test.** M3: `en7571` probes, hwmon exposes bias current and
-temperature, and `tx_enabled` reads 1. M4: the kernel reports O5 with OMCI up, the
-OLT accepts the ONU using the identity from the factory partition, and OMCI MIB
+**Acceptance test.** Unchanged: the kernel reports O5 with OMCI up, the OLT
+accepts the ONU using the identity from the factory partition, and OMCI MIB
 get/set round-trips.
 
 **Risk: high.** Driver work with no reference manual, on hardware that needs a fibre

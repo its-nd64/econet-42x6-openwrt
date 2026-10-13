@@ -15,8 +15,8 @@ milestone is only "done" when its stated acceptance test passes.
 |---|---|---|---|
 | **M1** | Boot to userspace over RAM | shell on the console, `/proc/mtd` lists the partitions, 512 MiB reported | **done** |
 | **M2** | Bring-up outside PON | SPI-NAND + BMT, 4x GbE switch, PCIe MT7916, LEDs/buttons, `data` overlay. "LAN up, Wi-Fi up, reboot keeps config" | **done** |
-| **M3** | Optical | `en7571` probes, hwmon exposes bias/temperature, `tx_enabled=1` | **step 1 done**: the SoC's I2C0 is up and the EN7571 answers at `0x70`; the driver and hwmon are next ([pon-port.md](pon-port.md) section 13) |
-| **M4** | GPON O5 + OMCI | `GPON netdev link ready: O5=1 OMCI=1`, OLT accepts the ONU, OMCI MIB replies | not started |
+| **M3** | Optical | `en7571` probes, hwmon exposes bias/temperature, `tx_enabled=1` | **done** `[hardware]`: `en7571` probes on `i2c0` at `0x70`, DDMI temperature/voltage read and match stock, BOB loads (see [pon-port.md](pon-port.md) section 14) |
+| **M4** | GPON O5 + OMCI | `GPON netdev link ready: O5=1 OMCI=1`, OLT accepts the ONU, OMCI MIB replies | **in progress** `[hardware]`: route-A stack builds clean (7 modules, autoloaded, self-loading), xPON probes on the board, OMCI userspace answers (`compatible: true`); GPON reaches O1->O2 with fibre but downstream never resolves -- MAC IRQs quiet, OMCI counters zero ([pon-port.md](pon-port.md) sections 15-21) |
 
 ## M1 -- done `[hardware]`
 
@@ -111,26 +111,34 @@ the blob (`tools/mt7916_eeprom_mac.py`) gives the interfaces a stable identity
 identity, laser BOB) sits in the vendor factory block in the trailing raw region
 and is **not** read yet. See [wifi.md](wifi.md) and [hardware.md](hardware.md).
 
-## M3 / M4 -- M3 started (optical bus up), M4 not started
+## M3 / M4 -- M3 done, M4 in progress (xPON probes, O1->O2, downstream open)
 
-The optical side has now been touched on hardware: the SoC's I2C0 came up and the EN7571 laser driver
-answered at address `0x70` (`i2cdetect -y -r 0`, image `img24`, 2026-10-08 -- [pon-port.md](pon-port.md)
-section 13). The `en7571` driver, its hwmon exposure and the xPON device tree nodes are still to come, so
-nothing optical has *driven* anything yet. The port is no longer unmapped `[not verified]`:
+M3 closed on hardware (`img25`, 2026-10-08 -- [pon-port.md](pon-port.md)
+section 14): `en7571` probes at `0x70`, `EN7571 initialised: GPON, rev 2, KT1,
+DDMI1`, `/sys/class/optical_frontend/frontend0` shows `present=1 ready=1`,
+hwmon temperature 41-42 C rising and 3.263 V matching stock within 0.4 mV.
 
-* the community xPON and optical sources were compiled object by object against
-  this kernel (6.18.54): **32 of 34 objects build clean**, including all of
-  `net/xpon/**` (14/14) and `drivers/net/optical/**` (15/15);
-* the two that fail (`airoha_xpon.o`, `airoha_gpon_omci.o`) fail only because of a
-  header API mismatch in `airoha_eth.h` -- the community Ethernet driver and the
-  OpenWrt one have diverged, and 17 `airoha_eth_*` hooks plus a set of types and
-  macros are missing;
-* one real API drift was found and fixed on the way: the pcs-provider API changed
-  between 6.18.44 and 6.18.54, so `pcs-en7523.c` needs
-  `devm_fwnode_pcs_add_provider()` instead of `fwnode_pcs_add_provider()`.
-* the same check against the community tree as of 2026-10-08 puts the missing
-  surface at **20** `airoha_eth_*xpon*()` entry points, so that count is growing
-  rather than shrinking.
+M4 (route A, images `img31`..`img61`, 2026-10-11/12) is where the project
+stands now:
+
+* the xPON patch series builds clean: 7 modules link with zero modpost
+  errors, land in the rootfs with autoload entries, self-load after boot;
+* `/sys/class/xpon` exists, the driver probes, `dmesg` shows no call
+  trace/panic/WARNING across reboots, LAN is unregressed (1 Gbps, NAT works);
+* the DT carries the PON nodes (GDM2 2500base-x, `xpon`/`xpon_phy`/`pon_pcs`,
+  `scu_reg`, `bob` + `gpon_serial` cell) with redacted placeholders -- real
+  serial comes from flash, password is empty;
+* OMCI userspace (`omci-agent` + LuCI) answers with `compatible: true` after
+  the v13/v14 handshake fix; identity UCI ships empty;
+* first light measured (RX ~-24 dBm); the boot-with-fibre hang is fixed by
+  deriving LOS from PHY READY (`950-08`); the FSM runs O1->O2;
+* **still open**: downstream never resolves -- MAC IRQs 39/40 quiet, OMCI
+  counters zero. Next is one read-only probe (`GPON_DBG_RX_GTC_CNT` at
+  `0x1fb64308`) that decides IRQ-routing vs RX-arming.
+
+The compile-harness history behind route A (32 of 34 objects clean, the
+`airoha_eth.h` divergence measured at 17 then 20 hooks) is kept in
+[pon-port.md](pon-port.md) sections 2-6.
 
 Prior art, surveyed 2026-10-08: a second, independent implementation reaches GPON
 O5 with full OMCI and internet on **EN7528** (openwrt PR #24577, licence-encumbered
@@ -138,18 +146,19 @@ in part), and a third does the same on **EN751221**; neither is EN7523, and no p
 source has reached O5 on this SoC. The survey, the reusable pieces and the upstream
 `net/pon` RFC are in [pon-port.md](pon-port.md) section 12.
 
-The stage 2 device tree overlay
+The PON device tree
 [`en7523-vgp42x6v1-pon.dtsi`](../openwrt/overlay/target/linux/airoha/dts/en7523-vgp42x6v1-pon.dtsi)
-records the register windows, interrupts and reset bits recovered from the stock
-device tree. It is not included by the board device tree and would not compile
-today, because the bindings it references do not exist yet. Status and next steps:
-[pon-port.md](pon-port.md).
+is included by the board device tree and compiles; it records the register
+windows, interrupts and reset bits recovered from the stock device tree, plus
+the `scu_reg`, `bob`/`gpon_serial` and `#optical-frontend-cells` details that
+each cost a boot to learn. Full story: [pon-port.md](pon-port.md) sections
+15-21.
 
 ## Still broken or open
 
-* **PON and optical (M3, M4).** The optical bus is confirmed (I2C0 up, EN7571 answers at `0x70`), but
-  nothing optical has driven or reported a measurement yet: no `en7571` driver, no hwmon reading.
-  `[partially verified]`
+* **PON downstream (M4).** Optical is done; xPON probes, O1->O2 reached with
+  fibre, but downstream never resolves (MAC IRQs quiet, OMCI counters zero;
+  next: one read-only `GPON_DBG_RX_GTC_CNT` probe). `[partially verified]`
 * **Real per-unit RF calibration.** Wi-Fi runs on the default blob, so the
   calibration is generic rather than the unit's own. The MAC is stable, but it is
   not read from the factory block. `[not verified]`
