@@ -72,6 +72,33 @@ apk add --allow-untrusted <package>
 starts with that and the rest identifies the build. If they do not match, the
 module is refused at load time rather than at install time.
 
+### Proving it on the board
+
+Two things can be wrong independently -- the repository may be unreachable, or the
+module may not belong to the kernel the board is running -- and they fail
+differently, so check them in that order:
+
+```sh
+uname -r                                     # must match the directory in the URL
+apk list --installed | grep '^kmod-'         # what the image already carries
+
+apk update --allow-untrusted                 # reachability and index, before installing
+apk search --allow-untrusted | head
+
+apk add --allow-untrusted kmod-<name>        # something the image does not carry
+modprobe <name> && dmesg | tail
+```
+
+A module built for a different kernel installs and then refuses to load:
+
+```
+insmod: ERROR: could not insert module ...: Invalid module format
+```
+
+That is the expected result of pointing a board at the wrong release tag, and it is
+the tag in the URL doing its job rather than a broken repository. It is also why
+the modules are fetched *per release* instead of from one shared directory.
+
 ### If GitHub Pages is not enabled
 
 apk does not need a web server, only a URL that serves the index, so the branch
@@ -141,5 +168,6 @@ running an older image still needs the modules built for its kernel.
   publishing them does not change what the image contains.
 * **The kmod repository has not been exercised on a board yet**: no release has
   been published. What is tested is the publisher itself -- its failure paths and
-  the layout it writes -- and the verification gate that runs before it in CI. The
-  first release is the test.
+  both source layouts -- and the verification gate that runs before it in CI. The
+  procedure above is what the first release has to pass, and until it does, the
+  repository is `[not verified]` on hardware.
