@@ -355,12 +355,14 @@ openwrt/
 scripts/            pin.env, apply-overlay.sh, build-firmware.sh,
                     packages.append + packages-m2.append, publish-packages.sh
 imagebuilder/       build-image.sh + package list + first-boot overlay
-tools/              UART / YMODEM / console-paste / image-verify / DTS-vs-image / eeprom-MAC helpers
+tools/              UART / YMODEM / console-paste / image-verify / DTS-vs-image /
+                    eeprom-MAC helpers, and the patch-appliance gate
+                    (tools/check_patches_apply.py)
 .github/workflows/  lint on every push; build.yml (reusable) and release.yml, which
                     builds both images, verifies them, publishes a GitHub Release
                     and updates the package repository on gh-pages
-docs/               hardware, Ethernet, LEDs, sysupgrade, PON, packages and build
-                    documentation
+docs/               hardware, Ethernet, LEDs, sysupgrade, PON, packages, CI and
+                    build documentation
 ```
 
 ---
@@ -379,6 +381,7 @@ docs/               hardware, Ethernet, LEDs, sysupgrade, PON, packages and buil
 | [`docs/sysupgrade.md`](docs/sysupgrade.md) | Persistent install: `/dev/mtd*`, `platform.sh`, slot B, what survives |
 | [`docs/image-builder.md`](docs/image-builder.md) | Producing and using the project's Image Builder |
 | [`docs/packages.md`](docs/packages.md) | The prebuilt images, and the apk repository published per release |
+| [`docs/ci.md`](docs/ci.md) | CI/CD: what runs on GitHub, the gates before anything is published, how to dispatch a release |
 | [`docs/pon-port.md`](docs/pon-port.md) | Where the xPON/optical port stands, and what blocks it |
 | [`docs/status.md`](docs/status.md) | Milestones, what is proven, what is not |
 | [`docs/roadmap.md`](docs/roadmap.md) | Prioritised remaining work with acceptance criteria |

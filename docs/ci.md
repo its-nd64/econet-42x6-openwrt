@@ -1,0 +1,143 @@
+# CI/CD
+
+Everything the project publishes is built on GitHub. No release asset is uploaded
+by hand, and none of the checks below need an OpenWrt tree to run except the build
+itself.
+
+## What runs, and when
+
+| Workflow | Trigger | Wall clock |
+|---|---|---|
+| [`lint.yml`](../.github/workflows/lint.yml) | every push, every pull request, manual | ~25 s |
+| [`build.yml`](../.github/workflows/build.yml) | `workflow_call` from `release.yml`, or manual: one variant, one kind of image | 2-2.5 h |
+| [`release.yml`](../.github/workflows/release.yml) | a `v*` tag, or manual with the inputs below | resolve 5 s, then two builds in parallel, then release + `gh-pages` |
+
+`build.yml` has no `push` trigger on purpose: it produces the artifacts, and
+`release.yml` decides what they mean and whether they are published.
+
+## Why a release is two builds, not one
+
+An image whose kernel carries the initramfs embedded cannot be the persistent
+image, because of how the split works: `mtdsplit_fit` derives the kernel partition
+as `round_up(FIT totalsize, erase block)` and then finds the rootfs after the FIT.
+This board's kernel partition (`mtd4`) is `0x3A0000` = 3801088 bytes. Measured on
+such a build: the squashfs landed at `0x760000` and the image was 12,058,913 bytes
+instead of 9,437,473 with the squashfs at `0x3A0000` -- an image `sysupgrade`
+cannot split correctly.
+
+`--initramfs` changes the kernel, so one build cannot yield both kinds. `release.yml`
+therefore runs `build.yml` twice, in parallel, on separate runners: one for
+`initramfs`, one for `sysupgrade`. The wall-clock cost is one build.
+
+The Image Builder belongs to the *sysupgrade* job for the same reason: the tarball
+bundles the kernel that was just built, so a tarball from the initramfs tree would
+hand every image it produces an initramfs-embedded kernel.
+
+## The gates, in the order they run
+
+| Gate | What it catches |
+|---|---|
+| `tools/check_workflows.py` | Invalid YAML, a `run:` block that does not parse, and an expression that uses a context GitHub does not allow there. The last one is why this exists: `env:` at job level cannot use `runner`, and GitHub cancels the *entire file* for it -- no job, no line number, just "This run likely failed because of a workflow file issue". |
+| `tools/check_patches.py` | A hunk header that disagrees with its body. `git apply` reads exactly as many body lines as the header promised and exits 0 for the remainder, so an under-counting header drops the tail of a hunk silently: that is how `CONFIG_I2C_MT7621=y` once went missing from an image while every check stayed green. |
+| `tools/check_patches_apply.py` | The series not applying to a clean tree at the pinned revision -- well-formed and applicable are different properties. It fetches every file the series touches from `raw.githubusercontent.com` at `OPENWRT_COMMIT`, applies the patches in the order `apply-overlay.sh` uses, and stops at the first refusal. About ten seconds, against hours for a build. If the network is unavailable it prints `SKIPPED` and exits 0: that is not a patch problem, but it is never silent. |
+| `tools/test_check_patches_apply.sh` | The gate above failing to fail. It plants a patch whose context does not exist and one shaped like the patch that broke this pipeline, and asserts both are refused by name. |
+| `tools/test_publish_packages.sh` | The package publisher's failure paths and both source layouts. 34 checks, no OpenWrt tree. |
+| `tools/test_build_firmware.sh` | `set_cfg`/`set_cfg_off` and the option parser, including `-jN` and the flags the workflow and the documentation pass. |
+| `tools/verify_build.py` | Run after the build: the FIT load and entry addresses must match where the kernel is linked, and the image must carry no debug breadcrumbs. |
+| `tools/verify_image.py` | Run after the build on the persistent image: a squashfs superblock must exist and start inside the kernel partition. This is the gate that keeps an unsplittable image out of a release. |
+
+The lint workflow also runs `bash -n` over every shell file, `py_compile` over
+every Python file, `shellcheck` (advisory), a CRLF scan and an advisory non-ASCII
+report. CRLF is worth its own line: a patch file converted to CRLF stops matching
+every LF context in the tree it is applied to.
+
+## The package repository
+
+Kernel modules cannot come from OpenWrt for this board: `airoha/en7523` is
+`FEATURES:=source-only`, which is how OpenWrt's builders decide not to publish a
+package feed for a target, and a module loads only into the exact kernel it was
+built against. Userspace packages are unaffected and install from the generic
+`aarch64_cortex-a53` feeds.
+
+`scripts/publish-packages.sh` assembles a repository per release tag:
+
+```
+<tag>/kmods/<kernel>/packages.adb + *.apk
+<tag>/packages/<arch>/<feed>/...            only with --with-feeds
+<tag>/metadata.json  <tag>/install.md
+releases.json  index.html  .nojekyll
+```
+
+and `release.yml` pushes it to the `gh-pages` branch, which is also what GitHub
+Pages serves. Two properties are deliberate:
+
+* **Keyed by tag.** A module from one release is refused by the kernel of another
+  ("Invalid module format"), which is the tag in the URL doing its job.
+* **Published whole.** The index beside a package directory lists every file in it,
+  so copying a subset would publish an index pointing at packages that are not
+  there. The source directory itself is *discovered* -- `kmods/<kernel>/` in a
+  builder's tree, `packages/` in a plain local build of this target -- and a tree
+  with more than one kernel under it is refused.
+
+The packages are unsigned; installing them needs `apk add --allow-untrusted`. That
+is a deliberate trade: signing means keeping a private key in CI secrets for an
+artifact that anybody can rebuild from `scripts/pin.env`. See
+[packages.md](packages.md) for the install commands, the raw-host fallback if Pages
+is disabled, and how to prove the repository on a board.
+
+## Releasing
+
+```powershell
+gh workflow run release.yml --ref main `
+  -f tag=v0.1.0-m2 -f variant=m2 -f feeds=false `
+  -f publish_release=true -f publish_pages=true
+```
+
+| Input | Meaning |
+|---|---|
+| `tag` | the release tag, created if it does not exist. The tag is what somebody clones to rebuild the images, so it is pinned to the commit the run built. |
+| `variant` | `m2` (4x GbE, Wi-Fi 6, LuCI, apk) or `full` (adds the optical frontend and xPON/OMCI). `m2` is what leaves this machine; `full` needs the per-unit BOB calibration blob, see [hardware.md](hardware.md). |
+| `feeds` | publish the userspace feeds to `gh-pages` as well. Off by default: the modules are a few megabytes, the full userspace set hundreds. This does not affect what goes into the image -- the build always installs the feeds. |
+| `publish_release` | create or update the GitHub Release (both builds must have succeeded). |
+| `publish_pages` | push the package repository to `gh-pages`. |
+
+A tag push (`git push origin v0.1.0-m2`) runs the same thing with the defaults, so
+the tag and the release always agree.
+
+## What has gone wrong here
+
+Each of these cost a run before it was fixed, and each has a check above that now
+catches it locally:
+
+1. `git clone <openwrt> openwrt` inside the checkout: this repository has an
+   `openwrt/` directory, so the clone always failed. The tree is fetched outside
+   the workspace instead.
+2. No step ran `./scripts/feeds update/install`. A freshly cloned tree has no
+   `feeds/`, so `make defconfig` dropped `CONFIG_PACKAGE_luci` without a word and
+   the image shipped with no web UI.
+3. The Image Builder was built by the initramfs job, giving every image it produced
+   an initramfs-embedded kernel.
+4. `--no-initramfs` unset the symbol instead of writing `# ... is not set`, so a
+   stale `=y` survived `make defconfig`.
+5. The Image Builder tarball was collected from `dist/`, where only
+   `build-imagebuilder.sh` copies it.
+6. `runner` in a job-level `env:` (see the gate table above).
+7. The workflow and the documentation both passed `-j4`, and the script accepted
+   only `-j 4`. Both sides were wrong in the same direction, which is why neither
+   caught it.
+8. Patch 0006 was refused by `git apply` although every context line it searched
+   for was present in the tree, byte for byte. Its hunk inserted at the end of a
+   context block that, in a clean tree, is the middle of another block: a position
+   from the tree the patch was written in. `tools/check_patches_apply.py` exists
+   because of this one.
+
+## Limits
+
+* The kernel patch series in `openwrt/overlay/` is **not** covered by
+  `check_patches_apply.py`. Those are applied inside the kernel build against
+  kernel sources, which this cannot reproduce without building a kernel.
+* `scripts/pin.env` pins OpenWrt, not the feeds. They float with their branch
+  heads, which is why the build prints every feed revision it installed.
+* A build is 2-2.5 hours on a GitHub runner. The gates above are cheap on purpose:
+  they run in seconds and cover the mistakes that would otherwise be found at the
+  end of that build.
