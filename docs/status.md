@@ -182,8 +182,11 @@ each cost a boot to learn. Full story: [pon-port.md](pon-port.md) sections
   it. New userspace packages install fine from the generic feeds, but `apk upgrade`
   must not be run: 12 installed packages are behind, one a `zlib` major-version
   change that can take the whole userland (and SSH) down. Modules that are not
-  baked in can be added from the repository CI publishes per release: see
-  [packages.md](packages.md).
+  baked in can be added from the repository CI publishes per release -- see
+  [packages.md](packages.md) for the URL, which is keyed to the release tag because
+  a module only loads into the kernel it was built against. `[not verified]` on
+  hardware: the pipeline is written and tested, **no release has been published
+  yet**.
 * **Image size limits.** `IMAGE_SIZE` is not set, so an oversized image is
   truncated at flash time rather than rejected at build time. `[not verified]`
 
