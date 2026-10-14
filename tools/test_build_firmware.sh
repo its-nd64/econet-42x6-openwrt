@@ -94,8 +94,48 @@ else
 fi
 
 echo
+echo "== the flags the documentation and CI actually pass"
+# The whole option loop, extracted the same way, so a spelling that stops being
+# accepted fails here instead of 20 seconds into a 2-3 hour CI run.  It has: the
+# workflow passed -j"$(nproc)" (which arrives as -j4) while the parser only took
+# `-j 4`, and the build died with "unknown option: -j4" -- yet the repository's own
+# examples showed -j8 the whole time.
+{
+	sed -n '/^INITRAMFS=1$/,/^done$/p' scripts/build-firmware.sh
+	echo 'printf "%s|%s|%s|%s|%s\n" "$JOBS" "$VARIANT" "$INITRAMFS" "$WITH_FEEDS" "$OWRT_ARG"'
+} > "$WORK/parser.sh"
+if [ ! -s "$WORK/parser.sh" ]; then
+	echo "FAIL could not extract the option parser"; fails=$((fails + 1))
+else
+	NCPU=$(nproc 2>/dev/null || echo 4)
+	expect_parse() { # expect_parse <label> <expected> <args...>
+		label=$1; expected=$2; shift 2
+		got=$(bash "$WORK/parser.sh" "$@" 2>/dev/null)
+		if [ "$got" = "$expected" ]; then
+			echo "  ok   $label"
+		else
+			echo "  FAIL $label: got '$got', expected '$expected'"
+			fails=$((fails + 1))
+		fi
+	}
+	expect_parse "-j4"            "4|full|1|1|"    -j4
+	expect_parse "-j 4"           "4|full|1|1|"    -j 4
+	expect_parse "--jobs 4"       "4|full|1|1|"    --jobs 4
+	expect_parse "--jobs=4"       "4|full|1|1|"    --jobs=4
+	expect_parse "--no-feeds"     "$NCPU|full|1|0|" --no-feeds
+	expect_parse "tree + -j8 + --variant m2 + --no-initramfs" \
+		"8|m2|0|1|/tree" /tree -j8 --variant m2 --no-initramfs
+	if bash "$WORK/parser.sh" -jbogus >/dev/null 2>&1; then
+		echo "  FAIL -jbogus was accepted as a job count"
+		fails=$((fails + 1))
+	else
+		echo "  ok   -jbogus is refused"
+	fi
+fi
+
+echo
 if [ "$fails" -ne 0 ]; then
 	echo "$fails check(s) FAILED"
 	exit 1
 fi
-echo "ok: set_cfg / set_cfg_off behave as the defconfig gate expects"
+echo "ok: set_cfg / set_cfg_off and the option parser behave as the gate expects"

@@ -24,6 +24,7 @@
 #   --imagebuilder     additionally produce the self-contained Image Builder
 #   --no-apply         skip apply-overlay.sh (assume the overlay is already in)
 #   -j N, --jobs N     build parallelism (default: number of CPUs)
+#                      -jN and --jobs=N are accepted too, as `make` accepts them
 #   -h, --help         this text
 #
 # Run this on Linux (or inside the Docker/WSL environment described in
@@ -62,7 +63,13 @@ while [ $# -gt 0 ]; do
 		--mt76-debug)   MT76_DEBUG=1 ;;
 		--imagebuilder) IMAGEBUILDER=1 ;;
 		--no-apply)     DO_APPLY=0 ;;
+		# Both spellings, because `make -j8` is muscle memory: the examples in
+		# this repository's own documentation use -j8, and the workflow passed
+		# `-j"$(nproc)"`, which arrives as `-j4`.  Only `-j 4` was accepted, so
+		# the build died with "unknown option: -j4" before it built anything.
 		-j|--jobs)      JOBS="${2:?--jobs needs a number}"; shift ;;
+		-j[0-9]*)       JOBS="${1#-j}" ;;
+		--jobs=[0-9]*)  JOBS="${1#--jobs=}" ;;
 		-h|--help)      awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
 		-*)             echo "!! unknown option: $1" >&2; exit 2 ;;
 		*)              OWRT_ARG="$1" ;;

@@ -209,7 +209,7 @@ jobs:
           IN_IB: ${{ inputs.imagebuilder }}
         run: |
           set -e
-          args=("$OWRT_DIR" --variant "$IN_VARIANT" -j"$(nproc)")
+          args=("$OWRT_DIR" --variant "$IN_VARIANT" -j "$(nproc)")
           if [ "$IN_IMAGES" = "initramfs" ]; then
             args+=(--initramfs)
           else

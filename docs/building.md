@@ -237,7 +237,7 @@ Useful flags:
 | `--mt76-debug` | also apply the diagnostic mt76 ring patch (never ship it) |
 | `--imagebuilder` | also produce the Image Builder tarball |
 | `--no-apply` | skip step 2, if the overlay is already in the tree |
-| `-j N` | build parallelism |
+| `-j N` | build parallelism; `-jN` and `--jobs=N` work too, as with `make` |
 
 ### Feeds are fetched for you, and they float
 
