@@ -324,7 +324,39 @@ echo "    all $(grep -c . "$SEEDED") symbol(s) present"
 
 echo
 echo "==> make -j$JOBS"
-( cd "$OWRT" && make -j"$JOBS" )
+# An OpenWrt parallel build writes each sub-build's output to logs/ instead of the
+# terminal, so a failure inside target/linux prints "ERROR: target/linux failed to
+# build" and nothing else: two CI runs ended on that one line, with the reason
+# sitting in a file on a runner that was about to be destroyed.  Keep the output,
+# name the directory that failed, and print its log, so the reason reaches whoever
+# reads the CI log -- build.yml uploads logs/ as well, for what does not fit here.
+BUILD_LOG=$(mktemp)
+trap 'rm -f "$BUILD_LOG"' EXIT
+set +e
+( cd "$OWRT" && make -j"$JOBS" ) 2>&1 | tee "$BUILD_LOG"
+MAKE_RC=${PIPESTATUS[0]}
+set -e
+if [ "$MAKE_RC" -ne 0 ]; then
+	failed=$(sed -n 's/^ *ERROR: \(.*\) failed to build.*/\1/p' "$BUILD_LOG" | head -1)
+	echo
+	echo "!! make exited $MAKE_RC${failed:+, and the directory that failed is '$failed'}"
+	if [ -d "$OWRT/logs" ]; then
+		found=0
+		while IFS= read -r f; do
+			found=1
+			echo
+			echo "--- $f (last 80 lines)"
+			tail -n 80 "$f"
+		done < <(find "$OWRT/logs" -type f -name '*.txt' \
+			\( -path "*${failed:-/no-such-directory}*" -o -mmin -20 \) \
+			2>/dev/null | head -20)
+		[ "$found" -eq 1 ] || echo "    (nothing matched in $OWRT/logs)"
+	else
+		echo "    (there is no $OWRT/logs directory)"
+	fi
+	exit 1
+fi
+rm -f "$BUILD_LOG"
 
 # ---------------------------------------------------------------------------
 # (5) Report

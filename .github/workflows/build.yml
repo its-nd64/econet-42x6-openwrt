@@ -318,6 +318,22 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Upload the build logs
+        # On failure only: an OpenWrt parallel build keeps each sub-build's output
+        # in logs/ rather than the terminal, so this is where the reason for a
+        # "target/linux failed to build" is.  build-firmware.sh prints the log of
+        # the directory that failed; this uploads all of them, for the case where
+        # the failure is somewhere the script did not guess.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ steps.meta.outputs.artifact }}
+          path: |
+            ${{ env.OWRT_DIR }}/logs/**
+            ${{ env.OWRT_DIR }}/.config
+          if-no-files-found: ignore
+          retention-days: 5
+
       - name: Upload the images
         if: inputs.upload
         uses: actions/upload-artifact@v4
