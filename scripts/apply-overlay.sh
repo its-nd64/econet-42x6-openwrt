@@ -11,15 +11,19 @@
 # What it does:
 #   1. applies openwrt/patches/*.patch   (edits to existing upstream files;
 #                                         0007-* selects the xPON symbols)
-#   2. copies  openwrt/overlay/.         (new files: board DTS, kernel patches
-#                                         incl. the route-A xPON series, mt76
-#                                         package patches, base-files overlay,
-#                                         diagnostic kernel modules)
+#   2. copies  openwrt/overlay/.         (new files: board DTS, kernel patches,
+#                                         mt76 package patches, base-files
+#                                         overlay, diagnostic kernel modules)
 #   3. optionally copies openwrt/dbg/... (--with-mt76-debug, one diagnostic
 #                                         mt76 patch that must NOT ship)
 #   4. always runs openwrt/pon/apply-pon.sh (route-A stub: airoha_wed.h) and
 #      openwrt/omci/apply-omci.sh (omci-agent + luci-app-omci, UAPI sync).
-#      --with-pon is kept as an accepted no-op for backwards compatibility.
+#
+# --with-pon adds openwrt/pon/patches-6.18/ -- nine xPON patches that modify files
+# this repository does not carry, so the tree also needs the community
+# airoha_en7523_all sources.  Without that flag the tree builds without xPON, and
+# without those sources the flag alone only moves where the build stops.  See
+# docs/pon-port.md.
 #
 # It is idempotent: re-running it on an already-patched tree succeeds.
 #
@@ -137,6 +141,9 @@ echo "    debug modules  package/kernel/{pciedbg,ringwatch}/  (built, not instal
 #      compressed (docs/building.md).  Report anything the repo does not ship.
 # ---------------------------------------------------------------------------
 owns="$REPO/openwrt/overlay/target/linux/$TARGET/patches-$KERNEL_SERIES"
+# The --with-pon series lands in the same directory, so it has to count as shipped
+# here too: otherwise every --with-pon run reports its own nine patches as stale.
+owns_pon="$REPO/openwrt/pon/patches-$KERNEL_SERIES"
 stale=0
 # Only a patch that the tree's own git does not track and this repo does not ship
 # is a hand-applied leftover.  Scanning every *.patch in the directory instead
@@ -146,7 +153,7 @@ if git -C "$OWRT" rev-parse --git-dir >/dev/null 2>&1; then
 	git -C "$OWRT" ls-files --others --exclude-standard -- \
 		"target/linux/$TARGET/patches-$KERNEL_SERIES" 2>/dev/null |
 	while IFS= read -r f; do
-		if [ ! -e "$owns/$(basename "$f")" ]; then
+		if [ ! -e "$owns/$(basename "$f")" ] && [ ! -e "$owns_pon/$(basename "$f")" ]; then
 			echo "!! patch in the tree that this repo does not ship: $(basename "$f")" >&2
 			stale=1
 		fi
@@ -154,7 +161,7 @@ if git -C "$OWRT" rev-parse --git-dir >/dev/null 2>&1; then
 else
 	for f in "$OWRT/target/linux/$TARGET/patches-$KERNEL_SERIES"/*.patch; do
 		[ -e "$f" ] || continue
-		if [ ! -e "$owns/$(basename "$f")" ]; then
+		if [ ! -e "$owns/$(basename "$f")" ] && [ ! -e "$owns_pon/$(basename "$f")" ]; then
 			echo "!! patch in the tree that this repo does not ship: $(basename "$f")" >&2
 			stale=1
 		fi
@@ -179,15 +186,48 @@ if [ "$WITH_MT76_DEBUG" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (3) Route-A PON + OMCI userspace.  Always applied: the kernel patch series
-#     in overlay/patches-6.18 (930-55..60, 940-01..06, 950-xx) needs the
-#     airoha_wed.h stub from openwrt/pon/overlay/ to compile, so gating it
-#     behind --with-pon would leave a broken tree.  --with-pon is kept as an
-#     accepted no-op flag for backwards compatibility with scripts and docs.
+# (3) Route-A PON + OMCI userspace.
+#
+#      apply-pon.sh is always run: it installs the airoha_wed.h stub, which the
+#      board's own Ethernet patches do include.
+#
+#      The xPON patches are not part of the default series any more, and the
+#      reason is measured rather than a preference.  Nine of them -- 930-60 and
+#      950-01..08 -- modify net/xpon/**, airoha_xpon.[ch], phy-airoha-xpon.c and
+#      airoha_gpon_omci.c, which exist in the community airoha_en7523_all branch
+#      and not in this repository: they were in the author's local tree.  Added to
+#      a clean tree they do not fail usefully, they fail as
+#
+#          can't find file to patch at input line 4
+#          No file to patch.  Skipping patch.
+#          1 out of 1 hunk ignored
+#          Patch failed!  Please fix .../950-01-...patch
+#
+#      and that stops `make target/linux/prepare` about twenty seconds in, which
+#      is what both jobs of CI run 38616337395 died on after 47 and 81 minutes of
+#      toolchain work.  They live in openwrt/pon/patches-6.18/ now and are copied
+#      in only with --with-pon, for somebody who has the community sources.
 # ---------------------------------------------------------------------------
 echo
 echo "==> route-A PON overlay (airoha_wed.h stub)"
 bash "$REPO/openwrt/pon/apply-pon.sh" "$OWRT"
+
+if [ "$WITH_PON" = "1" ]; then
+	echo
+	echo "==> xPON kernel patches (--with-pon)"
+	PON_PATCHES="$REPO/openwrt/pon/patches-$KERNEL_SERIES"
+	if [ -d "$PON_PATCHES" ]; then
+		cp -a "$PON_PATCHES/." "$OWRT/target/linux/$TARGET/patches-$KERNEL_SERIES/"
+		ls -1 "$PON_PATCHES"
+		cat <<'EOF'
+    Added to the series.  They modify files this repository does not carry --
+    net/xpon/**, airoha_xpon.[ch], phy-airoha-xpon.c, airoha_gpon_omci.c -- so the
+    build only works if the community airoha_en7523_all sources are in the tree
+    too.  Without them the kernel stage stops at the first of these patches.  See
+    docs/pon-port.md.
+EOF
+	fi
+fi
 echo
 echo "==> OMCI userspace (omci-agent + luci-app-omci, UAPI sync)"
 bash "$REPO/openwrt/omci/apply-omci.sh" "$OWRT"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Exercise set_cfg() / set_cfg_off() from build-firmware.sh against a fake .config.
+# Exercise set_cfg() / set_cfg_off() from build-firmware.sh against a fake .config,
+# and report_build_failure() against a fake build tree.
 #
 # Why this is worth a test: these two helpers decide what lands in .config before
 # `make defconfig`, and the SEEDED file they write is what the post-defconfig gate
@@ -21,9 +22,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 # The helpers are pulled out of the script rather than copied, so this cannot
 # drift into testing a stale duplicate of them.
-sed -n '/^set_cfg() {/,/^}/p;/^set_cfg_off() {/,/^}/p' scripts/build-firmware.sh > "$WORK/helpers.sh"
+sed -n '/^set_cfg() {/,/^}/p;/^set_cfg_off() {/,/^}/p;/^report_build_failure() {/,/^}/p' \
+	scripts/build-firmware.sh > "$WORK/helpers.sh"
 if [ ! -s "$WORK/helpers.sh" ]; then
-	echo "!! could not extract set_cfg/set_cfg_off from scripts/build-firmware.sh"
+	echo "!! could not extract set_cfg/set_cfg_off/report_build_failure from scripts/build-firmware.sh"
 	exit 1
 fi
 # shellcheck disable=SC1090,SC1091
@@ -133,9 +135,54 @@ else
 	fi
 fi
 
+echo "== reporting why a build failed"
+# The build's own output is useless here: with -j, OpenWrt keeps each sub-build's
+# output in logs/ and the top level prints one line naming the directory that
+# failed.  Two CI runs spent their whole 47 and 81 minutes to produce exactly that
+# line, so this is the part that has to work.
+FAKE="$WORK/owrt"
+mkdir -p "$FAKE/logs/target/linux"
+printf 'make[4]: Entering directory /kernel\nsome_wrong_thing.c:41:3: error: it did not compile\nmake[4]: *** [Makefile:9: all] Error 2\n' \
+	> "$FAKE/logs/target/linux/compile.txt"
+printf 'make[3] -C target/linux compile\n    ERROR: target/linux failed to build.\n' \
+	> "$WORK/make-output.txt"
+out=$(report_build_failure "$WORK/make-output.txt" "$FAKE" 2>&1)
+case "$out" in
+	*"directory that failed is 'target/linux'"*)
+		echo "  ok   the failing directory is named" ;;
+	*)	echo "  FAIL the failing directory is not named: $out"; fails=$((fails + 1)) ;;
+esac
+case "$out" in
+	*"some_wrong_thing.c:41:3: error: it did not compile"*)
+		echo "  ok   its log is printed, which is where the reason is" ;;
+	*)	echo "  FAIL the log of the failing directory was not printed"; fails=$((fails + 1)) ;;
+esac
+case "$out" in
+	*"logs/target/linux/compile.txt"*)
+		echo "  ok   and it says which file that came from" ;;
+	*)	echo "  FAIL the log file is not named"; fails=$((fails + 1)) ;;
+esac
+
+echo "== reporting when there is nothing to read"
+out=$(report_build_failure "$WORK/make-output.txt" "$WORK/no-such-tree" 2>&1)
+case "$out" in
+	*"logs directory to read"*)
+		echo "  ok   a tree without logs/ says so instead of printing nothing" ;;
+	*)	echo "  FAIL a tree without logs/ was not reported: $out"; fails=$((fails + 1)) ;;
+esac
+
+echo "== reporting when the named directory has no log"
+mkdir -p "$FAKE/other/logs"
+out=$(report_build_failure "$WORK/make-output.txt" "$FAKE/other" 2>&1)
+case "$out" in
+	*"nothing in"*)
+		echo "  ok   an unmatched logs/ directory says so" ;;
+	*)	echo "  FAIL an empty logs/ directory was reported as having content: $out"; fails=$((fails + 1)) ;;
+esac
+
 echo
 if [ "$fails" -ne 0 ]; then
 	echo "$fails check(s) FAILED"
 	exit 1
 fi
-echo "ok: set_cfg / set_cfg_off and the option parser behave as the gate expects"
+echo "ok: set_cfg / set_cfg_off, the option parser and the failure report behave as the gate expects"

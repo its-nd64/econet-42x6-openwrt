@@ -137,12 +137,52 @@ catches it locally:
    context block that, in a clean tree, is the middle of another block: a position
    from the tree the patch was written in. `tools/check_patches_apply.py` exists
    because of this one.
+9. Nine patches of the kernel series modified files this repository does not carry
+   -- `net/xpon/**`, `airoha_xpon.[ch]`, `phy-airoha-xpon.c`, `airoha_gpon_omci.c`
+   -- which live in the community `airoha_en7523_all` branch and were in the
+   author's local tree. Nothing failed at the overlay step; the failure came
+   twenty seconds into `make target/linux/prepare`, as
+
+   ```
+   can't find file to patch at input line 4
+   No file to patch.  Skipping patch.
+   1 out of 1 hunk ignored
+   Patch failed!  Please fix .../950-01-...patch!
+   ```
+
+   and it cost three runs, because the reason was in `logs/` rather than the
+   terminal (see the next section) and because the local gate covers
+   `openwrt/patches/`, which is applied to upstream files, and not the kernel
+   series. Those nine patches now live in `openwrt/pon/patches-6.18/` and need
+   `--with-pon`.
+
+## When a build fails
+
+An OpenWrt parallel build writes each sub-build's output to `logs/` instead of the
+terminal, so the top level reports a directory and nothing else:
+
+```
+make[3] -C target/linux compile
+    ERROR: target/linux failed to build.
+make -r world: build failed. Please re-run make with -j1 V=s ...
+```
+
+That line is true and useless, and it was the only thing three runs had to show
+for 47 to 81 minutes of work each. Two things now make the reason reach the log:
+`scripts/build-firmware.sh` keeps the make output, reads the failing directory out
+of that line, and prints the last 80 lines of the matching file in `logs/`; and the
+build job uploads `logs/` and `.config` as an artifact when it fails. The function
+that does the printing is `report_build_failure`, and
+`tools/test_build_firmware.sh` checks it against a fake tree.
 
 ## Limits
 
 * The kernel patch series in `openwrt/overlay/` is **not** covered by
-  `check_patches_apply.py`. Those are applied inside the kernel build against
-  kernel sources, which this cannot reproduce without building a kernel.
+  `check_patches_apply.py`. Those patches are applied inside the kernel build
+  against kernel sources, which that gate cannot reproduce without building a
+  kernel, and trap 9 above is what that gap cost. It is not expensive to close
+  (`make target/linux/prepare` reaches the kernel patches in about twenty seconds
+  once the host tools exist); until it is, a run is the only proof.
 * `scripts/pin.env` pins OpenWrt, not the feeds. They float with their branch
   heads, which is why the build prints every feed revision it installed.
 * A build is 2-2.5 hours on a GitHub runner. The gates above are cheap on purpose:

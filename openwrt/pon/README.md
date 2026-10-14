@@ -20,9 +20,10 @@ pre-O5 (downstream unresolved) -- see [docs/pon-port.md](../../docs/pon-port.md)
 
 | Piece | Location | Applied/selected by |
 |---|---|---|
-| xPON Kconfig/Makefile hooks (`net/`, `drivers/net/ethernet/airoha/`, `drivers/phy/airoha/`) | `../overlay/target/linux/airoha/patches-6.18/930-55`..`930-60` | OpenWrt, during the build |
+| xPON Kconfig/Makefile hooks (`net/`, `drivers/net/ethernet/airoha/`, `drivers/phy/airoha/`) | `../overlay/target/linux/airoha/patches-6.18/930-55`..`930-59` | OpenWrt, during the build |
+| `MODULE_LICENSE` for `net/xpon/oam` | `patches-6.18/930-60` | `--with-pon` (needs the community sources) |
 | Ethernet/PCS port (`airoha_eth` hooks, NPU shim, PCS API, `airoha_wed.h` forward decl.) | `.../patches-6.18/940-01`..`940-06` + `overlay/drivers/net/ethernet/airoha/airoha_wed.h` (via `apply-pon.sh`) | OpenWrt + `scripts/apply-overlay.sh` |
-| EN7523 bring-up guards (SCU clock-domain reset, undecoded-register guards, stop-before-PLOAM, disable-path breadcrumbs, LOS-from-ready) | `.../patches-6.18/950-01`..`950-08` | OpenWrt, during the build |
+| EN7523 bring-up guards (SCU clock-domain reset, undecoded-register guards, stop-before-PLOAM, disable-path breadcrumbs, LOS-from-ready) | `patches-6.18/950-01`..`950-08` | `--with-pon` (needs the community sources) |
 | pinctrl + reset-pulse prerequisites | `.../patches-6.18/202-29`, `202-30` | OpenWrt, during the build |
 | Symbol selection + kmod packages | `../patches/0007-target-airoha-enable-xpon.patch` | `scripts/apply-overlay.sh` |
 | Board device tree (GDM2, `xpon`, `xpon_phy`, `pon_pcs`, `scu_reg`, `bob` + `gpon_serial` cell) | `../overlay/target/linux/airoha/dts/en7523-vgp42x6v1{,-pon}.dtsi` | `scripts/apply-overlay.sh` |
@@ -34,6 +35,28 @@ cannot live in `patches-6.18` (it is a *new* file, and the route-A baseline
 of `airoha_eth.c` includes it while this kernel has no `mtk_wed_private.h`).
 Run it through `scripts/apply-overlay.sh`; it needs no arguments beyond the
 OpenWrt tree.
+
+### Why nine patches need `--with-pon`
+
+`930-60` and `950-01`..`950-08` modify files that **this repository does not
+carry**: `net/xpon/**`, `airoha_xpon.[ch]`, `phy-airoha-xpon.c` and
+`airoha_gpon_omci.c`. Those come from the community `airoha_en7523_all` branch and
+were present in the author's local tree, not in the public one. Applied to a clean
+tree they do not fail usefully either:
+
+```
+can't find file to patch at input line 4
+No file to patch.  Skipping patch.
+1 out of 1 hunk ignored
+Patch failed!  Please fix .../950-01-...patch!
+```
+
+which stops `make target/linux/prepare` about twenty seconds in. Both jobs of CI
+run 38616337395 died on exactly that after 47 and 81 minutes of toolchain work, and
+that is why the default series is now `930-55`..`930-59` + `940-01`..`940-06`, with
+the xPON ones in `patches-6.18/`. Without the community sources, `--with-pon` does
+not make them apply -- it only decides where the build stops, which is the honest
+behaviour for material this repository cannot ship.
 
 ## 2. Apply-order rule that bit us
 

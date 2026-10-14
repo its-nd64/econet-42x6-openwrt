@@ -186,6 +186,33 @@ set_cfg_off() {
 	echo "    # ${key} is not set"
 }
 
+# Print why the build failed.  An OpenWrt parallel build writes each sub-build's
+# output to logs/ instead of the terminal, so the top-level report names a directory
+# and nothing else -- "ERROR: target/linux failed to build" and a suggestion to re-run
+# with V=s.  Two CI runs ended on that line with the reason in a file on a runner that
+# was about to be destroyed, so the directory is taken from that line and its log is
+# printed here; build.yml uploads logs/ as well, for what does not fit.
+report_build_failure() { # report_build_failure <captured-make-output> <owrt-tree>
+	local log="$1" owrt="$2" failed found f
+	failed=$(sed -n 's/^ *ERROR: \(.*\) failed to build.*/\1/p' "$log" | head -1)
+	echo
+	echo "!! the build failed: the directory that failed is '${failed:-unknown}'"
+	if [ ! -d "$owrt/logs" ]; then
+		echo "    (there is no $owrt/logs directory to read)"
+		return 0
+	fi
+	found=0
+	while IFS= read -r f; do
+		found=1
+		echo
+		echo "--- $f (last 80 lines)"
+		tail -n 80 "$f"
+	done < <(find "$owrt/logs" -type f -name '*.txt' \
+		\( -path "*${failed:-/no-such-directory}*" -o -mmin -20 \) \
+		2>/dev/null | head -20)
+	[ "$found" -eq 1 ] || echo "    (nothing in $owrt/logs matched)"
+}
+
 echo "==> Seeding $CFG"
 set_cfg "CONFIG_TARGET_${TARGET}" "y"
 set_cfg "CONFIG_TARGET_${TARGET}_${SUBTARGET}" "y"
@@ -337,23 +364,7 @@ set +e
 MAKE_RC=${PIPESTATUS[0]}
 set -e
 if [ "$MAKE_RC" -ne 0 ]; then
-	failed=$(sed -n 's/^ *ERROR: \(.*\) failed to build.*/\1/p' "$BUILD_LOG" | head -1)
-	echo
-	echo "!! make exited $MAKE_RC${failed:+, and the directory that failed is '$failed'}"
-	if [ -d "$OWRT/logs" ]; then
-		found=0
-		while IFS= read -r f; do
-			found=1
-			echo
-			echo "--- $f (last 80 lines)"
-			tail -n 80 "$f"
-		done < <(find "$OWRT/logs" -type f -name '*.txt' \
-			\( -path "*${failed:-/no-such-directory}*" -o -mmin -20 \) \
-			2>/dev/null | head -20)
-		[ "$found" -eq 1 ] || echo "    (nothing matched in $OWRT/logs)"
-	else
-		echo "    (there is no $OWRT/logs directory)"
-	fi
+	report_build_failure "$BUILD_LOG" "$OWRT"
 	exit 1
 fi
 rm -f "$BUILD_LOG"
