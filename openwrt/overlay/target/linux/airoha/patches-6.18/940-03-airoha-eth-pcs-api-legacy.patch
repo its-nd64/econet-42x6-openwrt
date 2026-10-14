@@ -1,7 +1,7 @@
 diff -ruN a/drivers/net/ethernet/airoha/airoha_eth.c b/drivers/net/ethernet/airoha/airoha_eth.c
 --- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-10 18:37:47.579203757 +0000
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-10-10 18:37:47.601650040 +0000
-@@ -5237,8 +5237,13 @@
+@@ -5237,8 +5237,14 @@
  {
  	struct device *dev = config->dev;
  

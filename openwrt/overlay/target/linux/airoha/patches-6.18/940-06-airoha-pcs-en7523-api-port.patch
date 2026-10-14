@@ -9,7 +9,7 @@ diff -u -r a/drivers/net/pcs/airoha/pcs-en7523.c b/drivers/net/pcs/airoha/pcs-en
  	unsigned int i;
  	int ret;
  
-@@ -769,20 +770,28 @@
+@@ -769,20 +770,29 @@
  
  	platform_set_drvdata(pdev, priv);
  

@@ -67,7 +67,7 @@ immediately which step helped. Applies to EN7523 only
  #define EN751221_SCU_WAN_MODE_MASK	GENMASK(2, 0)
 --- a/drivers/net/ethernet/airoha/airoha_xpon.c
 +++ b/drivers/net/ethernet/airoha/airoha_xpon.c
-@@ -540,6 +540,60 @@
+@@ -540,6 +540,61 @@
  					 1, 200);
  }
  
