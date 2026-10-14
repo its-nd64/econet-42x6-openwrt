@@ -86,7 +86,15 @@ Pages serves. Two properties are deliberate:
   so copying a subset would publish an index pointing at packages that are not
   there. The source directory itself is *discovered* -- `kmods/<kernel>/` in a
   builder's tree, `packages/` in a plain local build of this target -- and a tree
-  with more than one kernel under it is refused.
+  with more than one *kernel* under it is refused.
+* **One kernel, several version strings, is normal.** A real build of this board
+  writes 53 modules named `6.18.54`, 2 named `6.18.54.7.2` (mac80211/cfg80211, which
+  append their own backports version) and 5 named `6.18.54.2026.09.01~be5ce791`
+  (mt76), all inside the same minute. The kernel is what those names share, it comes
+  from the `kernel-*` package in the same directory, and apk tells modules apart by
+  their dependency on `kernel (=<version>)` rather than by file name. The publisher
+  used to require one name for the whole directory, which no real tree satisfies --
+  the refusal below is about the kernel, not about that.
 
 The packages are unsigned; installing them needs `apk add --allow-untrusted`. That
 is a deliberate trade: signing means keeping a private key in CI secrets for an

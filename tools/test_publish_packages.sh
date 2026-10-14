@@ -111,6 +111,61 @@ printf 'fake' > "$WORK/mixedkernel/$TARGET_BIN/packages/kmod-mt7915e-6.18.54-r1.
 printf 'fake' > "$WORK/mixedkernel/$TARGET_BIN/packages/kmod-old-6.12.0-r1.apk"
 expect_exit 1 "for more than one kernel" "$WORK/mixedkernel" --tag v0.1.0 --out "$WORK/out"
 
+# A version that merely begins with the kernel's digits is a different kernel:
+# 6.18.540 is not 6.18.54 with a package version appended.
+mkdir -p "$WORK/prefix/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/prefix/$TARGET_BIN/packages/packages.adb"
+printf 'fake' > "$WORK/prefix/$TARGET_BIN/packages/kmod-a-6.18.54-r1.apk"
+printf 'fake' > "$WORK/prefix/$TARGET_BIN/packages/kmod-b-6.18.540-r1.apk"
+expect_exit 1 "for more than one kernel" "$WORK/prefix" --tag v0.1.0 --out "$WORK/out"
+
+# Two kernel packages in one directory: there is no single kernel to name the
+# repository after, whatever the module file names say.
+mkdir -p "$WORK/twokernels/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/twokernels/$TARGET_BIN/packages/packages.adb"
+printf 'fake' > "$WORK/twokernels/$TARGET_BIN/packages/kmod-a-6.18.54-r1.apk"
+printf 'fake' > "$WORK/twokernels/$TARGET_BIN/packages/kernel-6.18.54~aaaa-r1.apk"
+printf 'fake' > "$WORK/twokernels/$TARGET_BIN/packages/kernel-6.18.60~bbbb-r1.apk"
+expect_exit 1 "more than one kernel package" "$WORK/twokernels" --tag v0.1.0 --out "$WORK/out"
+
+# One kernel, three version strings -- the case a real build of this board produces
+# inside a single minute, and the one that a fixture never had: 53 modules at
+# 6.18.54, 2 at 6.18.54.7.2 (mac80211/cfg80211, backports version appended) and 5 at
+# 6.18.54.2026.09.01~be5ce791 (mt76, package version appended).  The publisher used to
+# read the kernel off the file names and refuse this directory, so a real tree caught
+# what no test did -- and it would have failed CI at the last step of a two and a
+# half hour run, which is the failure this script exists to prevent.
+mkdir -p "$WORK/samesuffixes/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/samesuffixes/$TARGET_BIN/packages/packages.adb"
+for n in kmod-hwmon-core-6.18.54-r1 kmod-xpon-oam-6.18.54-r1 \
+	kmod-cfg80211-6.18.54.7.2-r4 kmod-mac80211-6.18.54.7.2-r4 \
+	kmod-mt76-connac-6.18.54.2026.09.01~be5ce791-r1 \
+	kmod-mt7916-firmware-6.18.54.2026.09.01~be5ce791-r1
+do
+	printf 'fake' > "$WORK/samesuffixes/$TARGET_BIN/packages/$n.apk"
+done
+printf 'fake' > "$WORK/samesuffixes/$TARGET_BIN/packages/kernel-6.18.54~8d72922b0fedd3131c6845f92da1b528-r1.apk"
+expect_exit 0 "" "$WORK/samesuffixes" --tag v0.1.0 --out "$WORK/suffixrepo"
+for want in \
+	"$WORK/suffixrepo/v0.1.0/kmods/6.18.54/kmod-mac80211-6.18.54.7.2-r4.apk" \
+	"$WORK/suffixrepo/v0.1.0/kmods/6.18.54/kmod-mt76-connac-6.18.54.2026.09.01~be5ce791-r1.apk" \
+	"$WORK/suffixrepo/v0.1.0/kmods/6.18.54/packages.adb"
+do
+	CASES=$((CASES + 1))
+	[ -e "$want" ] || fail "the kernel they share should name the directory: $want is missing"
+done
+
+# The same directory without a kernel package: the shortest version is the kernel,
+# because the others are that version with something appended.
+mkdir -p "$WORK/nokernelpkg/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/nokernelpkg/$TARGET_BIN/packages/packages.adb"
+printf 'fake' > "$WORK/nokernelpkg/$TARGET_BIN/packages/kmod-a-6.18.54-r1.apk"
+printf 'fake' > "$WORK/nokernelpkg/$TARGET_BIN/packages/kmod-b-6.18.54.7.2-r4.apk"
+expect_exit 0 "" "$WORK/nokernelpkg" --tag v0.1.0 --out "$WORK/nokernelrepo"
+CASES=$((CASES + 1))
+[ -e "$WORK/nokernelrepo/v0.1.0/kmods/6.18.54/kmod-b-6.18.54.7.2-r4.apk" ] \
+	|| fail "without a kernel package the shortest version should name the directory"
+
 mkdir -p "$WORK/nofeed/$TARGET_BIN/kmods/$KERNEL" "$WORK/nofeed/bin/packages/aarch64_cortex-a53/base"
 printf 'C: x\n' > "$WORK/nofeed/$TARGET_BIN/kmods/$KERNEL/packages.adb"
 printf 'fake' > "$WORK/nofeed/$TARGET_BIN/kmods/$KERNEL/kmod-x.apk"

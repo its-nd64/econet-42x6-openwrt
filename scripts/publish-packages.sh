@@ -155,6 +155,22 @@ KMOD_INDEX=$(index_name "$KMOD_DIR")
 # The kernel version names the directory users point apk at, so it has to be
 # right.  A kmods/<kernel>/ directory states it; a mixed packages/ directory only
 # states it in the file names, kmod-<module>-<kernel>-r<release>.apk.
+#
+# What a module's file name states is NOT one kernel per directory, which an earlier
+# version of this script assumed and which would have failed a two and a half hour
+# run at the last step.  Measured on a real build of this board, in one directory
+# written inside the same minute (10-12 20:35 and 20:36), 71 packages:
+#
+#   53 at 6.18.54                     plain kernel modules
+#    2 at 6.18.54.7.2                 mac80211/cfg80211, backports version appended
+#    5 at 6.18.54.2026.09.01~be5ce791 mt76, package version appended
+#
+# OpenWrt publishes exactly these together -- its own kmods/<kernel-version>/
+# directory holds every module built against that kernel, whatever the module's own
+# version adds to the name -- and apk tells them apart by each module's dependency on
+# kernel (=<kernel package version>), not by its file name.  So the kernel is the
+# part the versions share, and a module from a *different* kernel is one whose
+# version does not continue that shared part.
 KMOD_NAME=""
 LAYOUT="kmods/<kernel>/"
 case "$KMOD_DIR" in
@@ -176,16 +192,59 @@ if [ -z "$KMOD_NAME" ]; then
 		echo "   expected kmod-<module>-<kernel>-r<release>.apk" >&2
 		exit 1
 	fi
-	UNIQ=$(printf '%s\n' "${VERSIONS[@]}" | sort -u)
-	if [ "$(printf '%s\n' "$UNIQ" | wc -l)" -ne 1 ]; then
+	# The kernel package in the same directory states the kernel.  OpenWrt links
+	# every module to it by version, and its own version carries a BuildID after a
+	# tilde (kernel-6.18.54~8d72922b0fedd3131c6845f92da1b528-r1.apk) which is not
+	# part of the kernel version.  Two kernel packages in one directory is the case
+	# this check exists for, and then there is no single answer.
+	KERNEL_PKGS=()
+	for f in "$KMOD_DIR"kernel-*.apk "$KMOD_DIR"kernel-*.ipk; do
+		[ -e "$f" ] || continue
+		KERNEL_PKGS+=("$f")
+	done
+	if [ ${#KERNEL_PKGS[@]} -gt 1 ]; then
+		echo "!! $KMOD_DIR holds more than one kernel package:" >&2
+		printf '     %s\n' "${KERNEL_PKGS[@]##*/}" >&2
+		echo "   Modules only load into the kernel they were built against, so a" >&2
+		echo "   directory with two kernels cannot be published as one repository." >&2
+		exit 1
+	fi
+	if [ ${#KERNEL_PKGS[@]} -eq 1 ]; then
+		KMOD_NAME=$(basename "${KERNEL_PKGS[0]}" | sed -n 's/^kernel-\(.*\)-r[0-9][0-9A-Za-z.]*\.\(apk\|ipk\)$/\1/p')
+		KMOD_NAME=${KMOD_NAME%%~*}
+	fi
+	if [ -z "$KMOD_NAME" ]; then
+		# No kernel package to ask: the kernel is the shortest version present, since
+		# the others are that version with a package version appended.  Measured
+		# above; a different kernel does not continue the shortest one.
+		KMOD_NAME=$(printf '%s\n' "${VERSIONS[@]}" | awk '{ print length, $0 }' \
+			| sort -n | head -1 | cut -d' ' -f2-)
+	fi
+	# Every module must belong to that kernel.  "6.18.540" must not pass as a
+	# member of "6.18.54", hence the separator.
+	STRANGE=()
+	for v in "${VERSIONS[@]}"; do
+		case "$v" in
+			"$KMOD_NAME"|"$KMOD_NAME".*|"$KMOD_NAME"~*) ;;
+			*) STRANGE+=("$v") ;;
+		esac
+	done
+	if [ ${#STRANGE[@]} -ne 0 ]; then
 		echo "!! $KMOD_DIR holds kernel modules for more than one kernel:" >&2
-		printf '     %s\n' $UNIQ >&2
+		printf '     %s\n' $KMOD_NAME >&2
+		for v in "${STRANGE[@]}"; do
+			printf '     %s  <- not built against %s\n' "$v" "$KMOD_NAME" >&2
+		done
 		echo "   A module only loads into the kernel it was built against, so this" >&2
 		echo "   directory cannot be published as one repository.  Build the tree" >&2
 		echo "   from clean, or remove the modules of the kernel you do not want." >&2
 		exit 1
 	fi
-	KMOD_NAME="$UNIQ"
+	echo "    kernel $KMOD_NAME, ${#KMOD_FILES[@]} module(s)" >&2
+	if [ "${#VERSIONS[@]}" -gt 1 ]; then
+		echo "    version strings in this directory (all the same kernel):" >&2
+		printf '      %s\n' $(printf '%s\n' "${VERSIONS[@]}" | sort -u) >&2
+	fi
 fi
 KMOD_SOURCE=${KMOD_DIR#"$OWRT"/}
 # The directory keeps its trailing slash for globbing, but the path recorded in

@@ -151,7 +151,11 @@ modules are looked for in `bin/targets/airoha/en7523/kmods/*/` first (the shape
 OpenWrt's own builders publish) and then in `bin/targets/airoha/en7523/packages/`,
 which is where a plain local build of this target leaves them: measured on a real
 build of this board, that directory held 73 packages, among them
-`kmod-xpon-6.18.54-r1.apk`. It refuses a tree with more than one kernel under it,
+`kmod-xpon-6.18.54-r1.apk`. It refuses a tree with more than one *kernel* under it --
+not a directory whose modules carry several version strings, which is what a single
+build produces: the same measurement has 53 modules named `6.18.54`, 2 named
+`6.18.54.7.2` and 5 named `6.18.54.2026.09.01~be5ce791`, all built together against
+`6.18.54`. It also
 refuses to write a half-filled release directory, publishes whichever directory it
 chose *whole* -- the index beside those packages lists every one of them, so
 copying a subset would publish an index pointing at files that are not there -- and
