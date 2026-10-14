@@ -274,14 +274,32 @@ echo "==> make defconfig"
 echo
 echo "==> Verifying the seeded symbols survived defconfig"
 MISSING=0
+MISSING_OFF=""
 while IFS= read -r want; do
 	[ -n "$want" ] || continue
 	if ! grep -qx "$want" "$CFG"; then
 		echo "    MISSING  $want" >&2
 		MISSING=$((MISSING + 1))
+		# Symbols this script turned *off* are spelled the way kconfig spells
+		# them.  If one of those does not come back in that form, the fault is
+		# this script's spelling rather than the tree's configuration, and the
+		# generic advice below would send the reader the wrong way.
+		case "$want" in
+			'#'*) MISSING_OFF="$want" ;;
+		esac
 	fi
 done < "$SEEDED"
 if [ "$MISSING" -ne 0 ]; then
+	if [ -n "$MISSING_OFF" ]; then
+		cat >&2 <<EOF
+
+   A symbol this script turned OFF did not come back as '$MISSING_OFF'.
+   That spelling is kconfig's own ('CONFIG_FOO=n' is rewritten to '# CONFIG_FOO
+   is not set'), so if kconfig wrote something else -- or dropped the symbol
+   because it is not visible in this tree -- then set_cfg_off in this script is
+   wrong, not your .config.  tools/test_build_firmware.sh covers that spelling.
+EOF
+	fi
 	cat >&2 <<'EOF'
 
 !! Seeded symbol(s) did not survive make defconfig.
