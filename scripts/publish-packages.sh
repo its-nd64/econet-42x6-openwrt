@@ -12,7 +12,7 @@
 # target airoha/en7523 is FEATURES:=source-only, which is how OpenWrt's builders
 # decide not to publish a package feed for it, and a module is built against one
 # exact kernel.  Userspace packages are unaffected -- they depend on the CPU/ABI,
-# not the kernel, so the generic aarch64_cortex-a53 feeds serve this board
+# not the kernel, so the generic arm_cortex-a7 feeds serve this board
 # normally.
 #
 # So a module that is not already in the image has to come from a repository
@@ -395,7 +395,7 @@ cat > "$OUT/index.html" <<EOF
  installed from downloads.openwrt.org.  This branch carries a repository per
  release instead, holding the target's own packages and the kernel modules built
  against that release's kernel.  Userspace packages are unaffected: they come
- from the generic <code>aarch64_cortex-a53</code> feeds as usual.
+ from the generic <code>arm_cortex-a7</code> feeds as usual.
 </p>
 <p><a href="releases.json">releases.json</a> lists every published release with
  its kernel and the sha256 of its images.</p>

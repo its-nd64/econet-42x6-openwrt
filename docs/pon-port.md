@@ -620,9 +620,17 @@ retired. Instead the xPON stack is ported the way OpenWrt expects: a patch
 series under `openwrt/overlay/target/linux/airoha/patches-6.18/` that the
 build applies by itself, plus symbol selection in `openwrt/patches/0007-*`.
 
+`930-60` and `950-01`..`950-08` are **not** part of that default series: they
+modify `net/xpon/**`, `airoha_xpon.[ch]`, `phy-airoha-xpon.c` and
+`airoha_gpon_omci.c`, which this repository does not carry (they come from the
+community `airoha_en7523_all` branch and were in the author's local tree). Applied
+to a clean tree they do not apply at all -- `can't find file to patch` -- and that
+is what stopped the release pipeline. They live in `openwrt/pon/patches-6.18/` and
+need `scripts/apply-overlay.sh --with-pon`, together with those sources.
+
 | Series | Contents |
 |---|---|
-| `930-55`..`930-60` | Kconfig/Makefile hooks for `net/xpon`, `drivers/net/ethernet/airoha` and `drivers/phy/airoha`, plus the missing `MODULE_LICENSE` in `net/xpon/oam` (without it `xpon-oam.ko` fails modpost; the fork builds it built-in, which hides the bug) |
+| `930-55`..`930-59` | Kconfig/Makefile hooks for `net/xpon`, `drivers/net/ethernet/airoha` and `drivers/phy/airoha` |
 | `940-01` | `airoha_eth.c`/`.h`/`airoha_regs.h` brought to the community baseline `781502ce` -- the rewrite closest to this tree, so every existing OpenWrt patch still applies |
 | `940-02` | `airoha_npu_start()` shim: keeps caller semantics, does nothing (upstream loads NPU firmware in probe; the fork's split load is not ported) |
 | `940-03` | two multi-PCS hunks back-ported to this tree's earlier API (`fwnode_phylink_pcs_parse()` takes the count by value; no `num_available_pcs` field) |

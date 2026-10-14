@@ -1,0 +1,91 @@
+name: kernel patches
+
+# The kernel patch series under openwrt/overlay/ is applied inside the kernel build,
+# not by scripts/apply-overlay.sh, so no check that runs on the repository alone can
+# see it -- and tools/check_patches_apply.py, which does check openwrt/patches/, is
+# blind to it by construction.  Nine patches once modified files this repository does
+# not carry, and the first sign of it was "ERROR: target/linux failed to build" forty
+# minutes into a two-and-a-half-hour release build.  This job reaches the same point
+# in about three minutes: clone, overlay, defconfig, `make target/linux/prepare`.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: kernel-patches-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # Outside the checkout: this repository has an openwrt/ directory, and a clone
+      # into it fails on the second run of a job that shares the workspace.
+      OWRT_DIR: ${{ github.workspace }}/../owrt-kernel-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned OpenWrt revision
+        id: pin
+        run: |
+          set -e
+          . scripts/pin.env
+          echo "commit=$OPENWRT_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "OpenWrt $OPENWRT_COMMIT (${OPENWRT_DESCRIBE:-})"
+
+      - name: Fetch OpenWrt at the pinned revision
+        env:
+          COMMIT: ${{ steps.pin.outputs.commit }}
+        run: |
+          set -e
+          . scripts/pin.env
+          rm -rf "$OWRT_DIR"
+          for attempt in 1 2 3; do
+            echo "==> git clone attempt $attempt"
+            if git clone --filter=blob:none "$OPENWRT_REPO" "$OWRT_DIR"; then
+              break
+            fi
+            rm -rf "$OWRT_DIR"
+            if [ "$attempt" = 3 ]; then
+              echo "!! could not fetch OpenWrt after 3 attempts"
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
+          git -C "$OWRT_DIR" checkout "$COMMIT"
+          git -C "$OWRT_DIR" log -1 --format='%H %ad %s' --date=short
+
+      - name: Cache OpenWrt downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OWRT_DIR }}/dl
+          key: owrt-dl-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/pin.env') }}
+          restore-keys: |
+            owrt-dl-${{ steps.pin.outputs.commit }}-
+
+      - name: The kernel patch series applies
+        # --no-packages and --no-feeds: the feeds and the package list have nothing to
+        # do with whether the kernel patches apply, and skipping them keeps this job
+        # at minutes rather than tens of minutes.  The target symbols are still seeded,
+        # so `make defconfig` is the same one the real build uses.
+        run: |
+          set -e
+          BUILD_TARGET=target/linux/prepare \
+            scripts/build-firmware.sh "$OWRT_DIR" --variant m2 --no-packages --no-feeds \
+              -j "$(nproc)"
+
+      - name: Upload the build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-patch-logs
+          path: ${{ env.OWRT_DIR }}/logs/**
+          if-no-files-found: ignore
+          retention-days: 5

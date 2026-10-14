@@ -66,10 +66,12 @@ else on this page refines a router that already works.
 **Where the work stands** `[hardware]`. M3 is done: `en7571` probes on `i2c0`
 at `0x70`, hwmon exposes temperature/voltage matching stock, BOB loads. M4
 moved to **route A**: the xPON stack is a normal kernel patch series
-(`930-55`..`930-60` hooks, `940-01`..`940-06` Ethernet/PCS port, `950-01`..
-`950-08` EN7523 bring-up guards), selected by `openwrt/patches/0007-*` and
-described by the board device tree. It builds clean (7 modules, zero modpost
-errors), the modules self-load, the driver probes, OMCI userspace answers
+(`930-55`..`930-59` hooks, `940-01`..`940-06` Ethernet/PCS port; `930-60` and
+`950-01`..`950-08` need `--with-pon` **and** the community `net/xpon` sources, which
+this repository does not carry), selected by `openwrt/patches/0007-*` and
+described by the board device tree. In a tree that also carries those sources it
+builds clean (7 modules, zero modpost errors), the modules self-load, the driver
+probes, OMCI userspace answers
 (`compatible: true` after the v13/v14 handshake fix), the serial comes from
 the `gpon_serial` nvmem cell, and with fibre the FSM runs O1->O2 (`img61`
 boots with fibre connected after the LOS-from-READY fix). Full evidence:

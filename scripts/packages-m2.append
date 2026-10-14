@@ -54,7 +54,7 @@ CONFIG_PACKAGE_luci-app-package-manager=y
 # --- package manager --------------------------------------------------------
 # OpenWrt main ships apk (apk-tools 3.x); opkg no longer exists in the snapshot.
 # Userspace packages can be added later from OpenWrt's generic
-# aarch64_cortex-a53 feeds, but a kernel module cannot: the target is
+# arm_cortex-a7 feeds, but a kernel module cannot: the target is
 # FEATURES:=source-only, so no kmods/ directory is published for it, and a module
 # has to match the running kernel exactly.  Whatever this image needs in the way
 # of kmod-* therefore has to be selected here.  For the modules that are not baked

@@ -9,6 +9,7 @@ itself.
 | Workflow | Trigger | Wall clock |
 |---|---|---|
 | [`lint.yml`](../.github/workflows/lint.yml) | every push, every pull request, manual | ~25 s |
+| [`kernel-patches.yml`](../.github/workflows/kernel-patches.yml) | every push, every pull request, manual | ~3 min |
 | [`build.yml`](../.github/workflows/build.yml) | `workflow_call` from `release.yml`, or manual: one variant, one kind of image | 2-2.5 h |
 | [`release.yml`](../.github/workflows/release.yml) | a `v*` tag, or manual with the inputs below | resolve 5 s, then two builds in parallel, then release + `gh-pages` |
 
@@ -49,7 +50,8 @@ hand every image it produces an initramfs-embedded kernel.
 | `tools/check_patches_apply.py` | The series not applying to a clean tree at the pinned revision -- well-formed and applicable are different properties. It fetches every file the series touches from `raw.githubusercontent.com` at `OPENWRT_COMMIT`, applies the patches in the order `apply-overlay.sh` uses, and stops at the first refusal. About ten seconds, against hours for a build. If the network is unavailable it prints `SKIPPED` and exits 0: that is not a patch problem, but it is never silent. |
 | `tools/test_check_patches_apply.sh` | The gate above failing to fail. It plants a patch whose context does not exist and one shaped like the patch that broke this pipeline, and asserts both are refused by name. |
 | `tools/test_publish_packages.sh` | The package publisher's failure paths and both source layouts. 34 checks, no OpenWrt tree. |
-| `tools/test_build_firmware.sh` | `set_cfg`/`set_cfg_off` and the option parser, including `-jN` and the flags the workflow and the documentation pass. |
+| `tools/test_build_firmware.sh` | `set_cfg`/`set_cfg_off`, the option parser, including `-jN`, and the failure report itself. |
+| `kernel-patches.yml` | The kernel patch series not applying. This is the one gate that needs an OpenWrt tree and the one no check in this repository can replace: the series is applied *inside* the kernel build, against kernel sources, so `check_patches_apply.py` is blind to it by construction -- which is how nine patches that modified files the repository does not carry reached a release build. The job clones the tree, applies the overlay, and runs `BUILD_TARGET=target/linux/prepare`, which reaches the patches in about twenty seconds instead of forty minutes. It does not compile the kernel, so it cannot catch a compile error. |
 | `tools/verify_build.py` | Run after the build: the FIT load and entry addresses must match where the kernel is linked, and the image must carry no debug breadcrumbs. |
 | `tools/verify_image.py` | Run after the build on the persistent image: a squashfs superblock must exist and start inside the kernel partition. This is the gate that keeps an unsplittable image out of a release. |
 
@@ -64,7 +66,7 @@ Kernel modules cannot come from OpenWrt for this board: `airoha/en7523` is
 `FEATURES:=source-only`, which is how OpenWrt's builders decide not to publish a
 package feed for a target, and a module loads only into the exact kernel it was
 built against. Userspace packages are unaffected and install from the generic
-`aarch64_cortex-a53` feeds.
+`arm_cortex-a7` feeds.
 
 `scripts/publish-packages.sh` assembles a repository per release tag:
 
@@ -178,11 +180,10 @@ that does the printing is `report_build_failure`, and
 ## Limits
 
 * The kernel patch series in `openwrt/overlay/` is **not** covered by
-  `check_patches_apply.py`. Those patches are applied inside the kernel build
-  against kernel sources, which that gate cannot reproduce without building a
-  kernel, and trap 9 above is what that gap cost. It is not expensive to close
-  (`make target/linux/prepare` reaches the kernel patches in about twenty seconds
-  once the host tools exist); until it is, a run is the only proof.
+  `check_patches_apply.py`, which can only check the patches applied to upstream
+  files. `kernel-patches.yml` closes that gap with a real OpenWrt tree and
+  `make target/linux/prepare`, at about three minutes. Trap 9 below is what the gap
+  cost: three runs of 47 to 81 minutes each.
 * `scripts/pin.env` pins OpenWrt, not the feeds. They float with their branch
   heads, which is why the build prints every feed revision it installed.
 * A build is 2-2.5 hours on a GitHub runner. The gates above are cheap on purpose:

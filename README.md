@@ -34,13 +34,17 @@ build.
 * A **base-files overlay**: `lib/upgrade/platform.sh`, which gives `sysupgrade`
   a partition to write to, and `etc/board.d/02_network`, which bridges the switch
   ports.
-* **Route-A xPON stack, applied by default** (`openwrt/pon/`, `openwrt/omci/`,
-  `openwrt/patches/0007-*`): the community xPON sources as a kernel patch
-  series (`930-55`..`930-60` hooks, `940-01`..`940-06` Ethernet/PCS port,
-  `950-01`..`950-08` EN7523 bring-up guards) plus the `omci-agent` /
-  `luci-app-omci` control plane. Builds 7 modules that self-load; the driver
-  probes and GPON reaches O1->O2, but downstream is unresolved. Unit identity
-  is redacted (placeholders in git, real serial from flash, empty password).
+* **Route-A xPON/optical work** (`openwrt/pon/`, `openwrt/omci/`,
+  `openwrt/patches/0007-*`): the upstream-side pieces are applied by default -- the
+  `930-55`..`930-59` Kconfig/Makefile hooks, the `940-01`..`940-06` Ethernet/PCS
+  port, and the `omci-agent` / `luci-app-omci` control plane. The nine patches that
+  touch the community xPON sources themselves (`930-60`, `950-01`..`950-08`) live in
+  `openwrt/pon/patches-6.18/` and need `--with-pon` **and** the
+  `airoha_en7523_all` sources, which this repository does not carry -- which is why
+  they are not in the default series; see [pon-port.md](docs/pon-port.md). Measured
+  on the author's own tree, which did carry those sources: 7 modules that self-load,
+  the driver probes, GPON reaches O1->O2, downstream unresolved. Unit identity is
+  redacted (placeholders in git, real serial from flash, empty password).
 * A **helper that writes a unit MAC into the default eeprom blob**
   ([`tools/mt7916_eeprom_mac.py`](tools/mt7916_eeprom_mac.py)), so a second board
   does not come up wearing the first board's address.
@@ -151,7 +155,7 @@ unit, use `--variant full` and read [`docs/pon-port.md`](docs/pon-port.md).
 directory for it, and **no kernel module for this board can be installed from
 downloads.openwrt.org**. (Userspace packages are a different matter: they depend
 on the CPU/ABI rather than the kernel, and install normally from the generic
-`aarch64_cortex-a53` feeds.) A kernel module has to come from a repository built
+`arm_cortex-a7` feeds.) A kernel module has to come from a repository built
 against the exact kernel the board is running, because one built against another
 kernel is refused at load time with `invalid module format`. CI publishes such a
 repository per release, keyed to the release tag, on the `gh-pages` branch:

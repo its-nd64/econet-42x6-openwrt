@@ -27,6 +27,14 @@
 #                      -jN and --jobs=N are accepted too, as `make` accepts them
 #   -h, --help         this text
 #
+# Environment:
+#   BUILD_TARGET     the make target, default `world`.  Setting it runs one stage
+#                    only and skips the artifact report, which is how
+#                    .github/workflows/kernel-patches.yml reaches the kernel patch
+#                    series in minutes: BUILD_TARGET=target/linux/prepare fails in
+#                    twenty seconds when a patch cannot apply, instead of forty
+#                    minutes into a build that was going to fail anyway.
+#
 # Run this on Linux (or inside the Docker/WSL environment described in
 # docs/building.md).  OpenWrt cannot be built on Windows itself.
 
@@ -359,8 +367,13 @@ echo "==> make -j$JOBS"
 # reads the CI log -- build.yml uploads logs/ as well, for what does not fit here.
 BUILD_LOG=$(mktemp)
 trap 'rm -f "$BUILD_LOG"' EXIT
+MAKE_ARGS=(-j"$JOBS")
+if [ -n "${BUILD_TARGET:-}" ]; then
+	echo "    BUILD_TARGET=$BUILD_TARGET (a partial build: no images are produced)"
+	MAKE_ARGS+=("$BUILD_TARGET")
+fi
 set +e
-( cd "$OWRT" && make -j"$JOBS" ) 2>&1 | tee "$BUILD_LOG"
+( cd "$OWRT" && make "${MAKE_ARGS[@]}" ) 2>&1 | tee "$BUILD_LOG"
 MAKE_RC=${PIPESTATUS[0]}
 set -e
 if [ "$MAKE_RC" -ne 0 ]; then
@@ -372,6 +385,16 @@ rm -f "$BUILD_LOG"
 # ---------------------------------------------------------------------------
 # (5) Report
 # ---------------------------------------------------------------------------
+# BUILD_TARGET stops at one stage, so there is nothing in bin/ to report and no
+# reason to pretend otherwise: the point of that mode is the failure, if there is
+# one, and it did not happen.  kernel-patches.yml uses it to reach the kernel patch
+# series in minutes instead of hours.
+if [ -n "${BUILD_TARGET:-}" ]; then
+	echo
+	echo "==> $BUILD_TARGET finished with $MAKE_RC; a partial build, so no artifacts are expected"
+	exit 0
+fi
+
 echo
 echo "==> Artifacts in $TARGET_BIN"
 BIN="$OWRT/$TARGET_BIN"

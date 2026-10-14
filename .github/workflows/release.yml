@@ -226,7 +226,7 @@ jobs:
             echo "itself here: \`airoha/en7523\` is \`source-only\`, so no \`kmods/\` directory is"
             echo "published for this board, and a module has to match the running kernel"
             echo "exactly.  (Userspace packages are unaffected and come from the generic"
-            echo "\`aarch64_cortex-a53\` feeds.)  This release publishes a repository of its own:"
+            echo "\`arm_cortex-a7\` feeds.)  This release publishes a repository of its own:"
             echo
             echo '```sh'
             echo "echo '${pages}/${TAG}/kmods/<kernel>' > /etc/apk/repositories.d/42x6-kmods.list"

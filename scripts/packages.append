@@ -9,7 +9,7 @@
 # installed later from an official feed -- it has to match the exact kernel build.
 # Anything an image needs in the way of kmod-* is selected here, or baked in
 # through DEVICE_PACKAGES in the device definition.  Userspace packages are not
-# affected: they install later from the generic aarch64_cortex-a53 feeds, and
+# affected: they install later from the generic arm_cortex-a7 feeds, and
 # docs/packages.md also describes the per-release kmod repository CI publishes.
 #
 # Rule: the value must be exactly "y", never "m".  CONFIG_PACKAGE_foo=m only

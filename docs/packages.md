@@ -4,8 +4,16 @@ Two different questions live in this document, and confusing them is the usual
 reason somebody spends an afternoon on `invalid module format`:
 
 * **Can I install a userspace package?** Yes, from OpenWrt's own generic
-  `aarch64_cortex-a53` feeds. Measured on the board: a new userspace package
+  `arm_cortex-a7` feeds. Measured on the board: a new userspace package
   installs, and the board still boots with SSH reachable.
+  The arch string is worth stating because this document said
+  `aarch64_cortex-a53` for a while: the `en7523` subtarget declares
+  `CPU_TYPE:=cortex-a7` and the target builds 32-bit (`CONFIG_ARCH="arm"`), so the
+  configuration seeded here resolves to `CONFIG_TARGET_ARCH_PACKAGES="arm_cortex-a7"`
+  -- the kernel build directory is literally `target-arm_cortex-a7_musl_eabi` --
+  and the board's own feed list in [wifi.md](wifi.md) section 4 names the same.
+  `aarch64_cortex-a53` is a different architecture: apk refuses those packages
+  here, the two are not interchangeable.
 * **Can I install a kernel module?** Not from OpenWrt. This is the half the
   repository published by this project exists for.
 

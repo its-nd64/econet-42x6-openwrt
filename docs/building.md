@@ -91,12 +91,31 @@ This does four things:
    (`package/kernel/mt76/patches/`) and the diagnostic kernel modules;
 3. optionally copies `openwrt/dbg/` with `--with-mt76-debug` -- one diagnostic
    mt76 patch that prints ring base addresses and must never ship;
-4. optionally applies the stage 2 PON material with `--with-pon`.
+4. with `--with-pon`, adds the nine xPON patches from `openwrt/pon/patches-6.18/`
+   to the kernel series. Those patch `net/xpon/**`, `airoha_xpon.[ch]`,
+   `phy-airoha-xpon.c` and `airoha_gpon_omci.c`, which come from the community
+   `airoha_en7523_all` branch and are **not** in this repository, so the flag is only
+   useful in a tree that has them; without them the kernel stage stops at the first
+   of the nine (`can't find file to patch`). The default series is
+   `930-55`..`930-59` and `940-01`..`940-06`, which touch upstream files only, and
+   that is what a release image is built from.
 
-It refuses to run if the tree is not at the pinned revision, and it is
-idempotent: running it twice is safe. Re-running after a partial failure works
-because each patch is checked with `--reverse --check` to see whether it is
-already applied.
+It refuses to run if the tree is not at the pinned revision, and each patch is
+checked with `--reverse --check` before it is applied, so a run that failed halfway
+can be resumed. It is **not** idempotent in general, and the earlier claim here that
+it was cost two debugging sessions: once a later patch has changed the same region
+as an earlier one -- 0003, 0005 and 0007 all write into `config-6.18` and
+`modules.mk` -- the earlier patch can be neither applied nor reverse-applied, and
+the script stops with
+
+```
+!! cannot apply 0003-target-airoha-en7523-enable-board-kernel-options.patch
+   Neither a clean apply nor an already-applied state was detected.
+```
+
+That is not a drifted patch: it is an already-applied one whose context a later
+patch has since rewritten. Start from a clean tree, or restore one with
+`git checkout -- . && git clean -fd -- target package` in the OpenWrt tree.
 
 **After changing anything under `package/kernel/mt76/patches/`, clean that
 package.** Package patches are applied in the *prepare* step, so an incremental
@@ -180,7 +199,7 @@ time. That is also why the Image Builder has to be produced with
 are the ones inside the tarball, `kmod-*` included.
 
 Userspace packages are a different case. They depend on the CPU/ABI rather than
-on the kernel, so the generic `aarch64_cortex-a53` feeds serve this board
+on the kernel, so the generic `arm_cortex-a7` feeds serve this board
 normally, and a kernel module can also be added after the fact from the
 per-release repository described in [`packages.md`](packages.md) -- as long as it
 was built for the kernel the board is running.
@@ -233,7 +252,7 @@ Useful flags:
 | `--debug-kmods` | install `kmod-pciedbg` and `kmod-ringwatch` into the image |
 | `--no-packages` | seed no package list at all into `.config` |
 | `--no-feeds` | do not run `./scripts/feeds update -a` / `install -a` first |
-| `--with-pon` | also apply the stage 2 PON patches (not functional yet) |
+| `--with-pon` | also add the nine xPON patches from `openwrt/pon/patches-6.18/`, which need the community xPON sources as well (not in this repository) |
 | `--mt76-debug` | also apply the diagnostic mt76 ring patch (never ship it) |
 | `--imagebuilder` | also produce the Image Builder tarball |
 | `--no-apply` | skip step 2, if the overlay is already in the tree |
