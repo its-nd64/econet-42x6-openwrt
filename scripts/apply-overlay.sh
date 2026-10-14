@@ -149,15 +149,19 @@ stale=0
 # is a hand-applied leftover.  Scanning every *.patch in the directory instead
 # also flags every patch OpenWrt itself ships (hundreds of lines of noise from
 # the airoha target), and a warning that fires on everything gets ignored.
+#
+# The loop reads through process substitution rather than a pipe: in a pipeline it
+# would run in a subshell, stale=1 would be lost with it, and the warning below
+# would never print on a tree that has git -- which is every tree CI builds on.  The
+# check looked like it worked and did nothing.
 if git -C "$OWRT" rev-parse --git-dir >/dev/null 2>&1; then
-	git -C "$OWRT" ls-files --others --exclude-standard -- \
-		"target/linux/$TARGET/patches-$KERNEL_SERIES" 2>/dev/null |
 	while IFS= read -r f; do
 		if [ ! -e "$owns/$(basename "$f")" ] && [ ! -e "$owns_pon/$(basename "$f")" ]; then
 			echo "!! patch in the tree that this repo does not ship: $(basename "$f")" >&2
 			stale=1
 		fi
-	done
+	done < <(git -C "$OWRT" ls-files --others --exclude-standard -- \
+		"target/linux/$TARGET/patches-$KERNEL_SERIES" 2>/dev/null)
 else
 	for f in "$OWRT/target/linux/$TARGET/patches-$KERNEL_SERIES"/*.patch; do
 		[ -e "$f" ] || continue
