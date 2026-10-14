@@ -110,8 +110,15 @@ jobs:
     # checkout dies with
     #     fatal: destination path 'openwrt' already exists and is not an empty directory
     # which is how the first run of this workflow failed, before it built anything.
+    #
+    # `github.workspace` and not `runner.temp`: a job-level `env:` may only use the
+    # github, needs, strategy, matrix, vars, secrets and inputs contexts.  `runner`
+    # is allowed in a step's `env:` and `with:` and not here, and writing it here
+    # made GitHub reject the whole file -- the push produced no jobs at all, just
+    # "This run likely failed because of a workflow file issue".  tools/
+    # check_workflows.py now knows this table and refuses the file locally.
     env:
-      OWRT_DIR: ${{ runner.temp }}/openwrt-build
+      OWRT_DIR: ${{ github.workspace }}/../owrt-build
 
     steps:
       - uses: actions/checkout@v4
