@@ -111,15 +111,22 @@ It is one script:
 ./scripts/publish-packages.sh openwrt --tag v0.2.0 --out pages [--with-feeds]
 ```
 
-It *discovers* the layout of the finished build tree instead of assuming it
-(`bin/targets/airoha/en7523/kmods/*/` for the modules, `bin/packages/<arch>/*/`
-for the feeds), refuses to write a half-filled release directory, and writes
-`metadata.json`, `install.md`, `releases.json` and `index.html` beside the
+It *discovers* the layout of the finished build tree instead of assuming it. The
+modules are looked for in `bin/targets/airoha/en7523/kmods/*/` first (the shape
+OpenWrt's own builders publish) and then in `bin/targets/airoha/en7523/packages/`,
+which is where a plain local build of this target leaves them: measured on a real
+build of this board, that directory held 73 packages, among them
+`kmod-xpon-6.18.54-r1.apk`. It refuses a tree with more than one kernel under it,
+refuses to write a half-filled release directory, publishes whichever directory it
+chose *whole* -- the index beside those packages lists every one of them, so
+copying a subset would publish an index pointing at files that are not there -- and
+writes `metadata.json`, `install.md`, `releases.json` and `index.html` beside the
 packages. `--with-feeds` is off by default because the kernel modules are a few
 megabytes and the full userspace set is hundreds: publish what somebody needs.
 
 `tools/test_publish_packages.sh` exercises the failure paths and the generated
-layout against a fake build tree, and `lint.yml` runs it on every push.
+layout against a fake build tree -- both layouts, `kmods/<kernel>/` and
+`packages/` -- and `lint.yml` runs it on every push.
 
 In CI, `release.yml` calls it in the job that produced the sysupgrade image, only
 after that image passed `tools/verify_image.py`, and the `pages` job pushes the
