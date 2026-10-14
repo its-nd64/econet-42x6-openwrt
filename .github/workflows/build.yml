@@ -96,7 +96,12 @@ permissions:
 
 jobs:
   firmware:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest.  GitHub announced on 2026-10-14 that the label
+    # moves to Ubuntu 26 on 2026-10-19; a build here takes two and a half hours and
+    # a host distribution that changes the compiler or the autotools underneath it
+    # is a failure nobody would connect to the runner.  When the label moves on,
+    # this changes deliberately, in its own commit.
+    runs-on: ubuntu-24.04
     timeout-minutes: 350
     outputs:
       commit: ${{ steps.pin.outputs.commit }}

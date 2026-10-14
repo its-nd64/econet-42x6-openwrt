@@ -51,7 +51,7 @@ concurrency:
 
 jobs:
   resolve:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.r.outputs.tag }}
       variant: ${{ steps.r.outputs.variant }}
@@ -134,7 +134,7 @@ jobs:
   release:
     needs: [resolve, initramfs, sysupgrade]
     if: needs.resolve.outputs.publish_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # Needed for scripts/pin.env, which the release notes quote.
       - uses: actions/checkout@v4
@@ -291,7 +291,7 @@ jobs:
   pages:
     needs: [resolve, sysupgrade]
     if: needs.resolve.outputs.publish_pages == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

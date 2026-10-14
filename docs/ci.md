@@ -15,6 +15,13 @@ itself.
 `build.yml` has no `push` trigger on purpose: it produces the artifacts, and
 `release.yml` decides what they mean and whether they are published.
 
+The runners are pinned to `ubuntu-24.04` rather than `ubuntu-latest`. GitHub
+announced on 2026-10-14 that the `ubuntu-latest` label starts moving to Ubuntu 26
+on 2026-10-19; a build here takes two and a half hours, and a host distribution
+that silently changes the compiler or the autotools underneath it produces a
+failure nobody would connect to the runner. The label change is then a deliberate
+commit, not a surprise in the middle of a release.
+
 ## Why a release is two builds, not one
 
 An image whose kernel carries the initramfs embedded cannot be the persistent
