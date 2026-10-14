@@ -81,16 +81,35 @@ mk_tree() {
 
 echo "== wrong build trees must be refused, with a reason"
 mkdir -p "$WORK/empty/$TARGET_BIN"
-expect_exit 1 "no kmods directory" "$WORK/empty" --tag v0.1.0 --out "$WORK/out"
+expect_exit 1 "no directory with a package index and kernel modules" \
+	"$WORK/empty" --tag v0.1.0 --out "$WORK/out"
 
 mkdir -p "$WORK/two/$TARGET_BIN/kmods/6.18.54-1-aaa" "$WORK/two/$TARGET_BIN/kmods/6.18.54-1-bbb"
 : > "$WORK/two/$TARGET_BIN/kmods/6.18.54-1-aaa/packages.adb"
 : > "$WORK/two/$TARGET_BIN/kmods/6.18.54-1-bbb/packages.adb"
-expect_exit 1 "more than one kmods directory" "$WORK/two" --tag v0.1.0 --out "$WORK/out"
+expect_exit 1 "more than one kernel" "$WORK/two" --tag v0.1.0 --out "$WORK/out"
 
 mkdir -p "$WORK/noindex/$TARGET_BIN/kmods/6.18.54-1-ccc"
 : > "$WORK/noindex/$TARGET_BIN/kmods/6.18.54-1-ccc/kmod-x.apk"
-expect_exit 1 "no package index" "$WORK/noindex" --tag v0.1.0 --out "$WORK/out"
+expect_exit 1 "no directory with a package index and kernel modules" \
+	"$WORK/noindex" --tag v0.1.0 --out "$WORK/out"
+
+# A target packages directory that holds no kernel module is not the directory
+# that makes a module installable, so it must not be published as if it were.
+mkdir -p "$WORK/userspaceonly/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/userspaceonly/$TARGET_BIN/packages/packages.adb"
+printf 'fake' > "$WORK/userspaceonly/$TARGET_BIN/packages/base-files-1-r1.apk"
+expect_exit 1 "no directory with a package index and kernel modules" \
+	"$WORK/userspaceonly" --tag v0.1.0 --out "$WORK/out"
+
+# Modules for two kernels in one directory: the invisible mistake, because
+# whichever module is installed from the other kernel fails to load, and the
+# repository itself looks fine.
+mkdir -p "$WORK/mixedkernel/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/mixedkernel/$TARGET_BIN/packages/packages.adb"
+printf 'fake' > "$WORK/mixedkernel/$TARGET_BIN/packages/kmod-mt7915e-6.18.54-r1.apk"
+printf 'fake' > "$WORK/mixedkernel/$TARGET_BIN/packages/kmod-old-6.12.0-r1.apk"
+expect_exit 1 "for more than one kernel" "$WORK/mixedkernel" --tag v0.1.0 --out "$WORK/out"
 
 mkdir -p "$WORK/nofeed/$TARGET_BIN/kmods/$KERNEL" "$WORK/nofeed/bin/packages/aarch64_cortex-a53/base"
 printf 'C: x\n' > "$WORK/nofeed/$TARGET_BIN/kmods/$KERNEL/packages.adb"
@@ -143,6 +162,49 @@ assert meta["userspace_feeds"] == 2, meta
 assert len(meta["images"]) == 1 and meta["images"][0]["size"] == 4096, meta
 assert len(meta["images"][0]["sha256"]) == 64, meta
 PY
+
+echo "== the layout this board's own build produces: packages/, not kmods/"
+# Measured on a real build of this board: 73 packages, among them
+# kmod-xpon-6.18.54-r1.apk, all under bin/targets/airoha/en7523/packages/.  An
+# earlier version of the publisher required kmods/<kernel>/ and would have failed
+# the CI run at the last step, after the whole build.
+mkdir -p "$WORK/mixed/$TARGET_BIN/packages"
+printf 'C: core\n' > "$WORK/mixed/$TARGET_BIN/packages/packages.adb"
+printf 'fake' > "$WORK/mixed/$TARGET_BIN/packages/kmod-mt7915e-6.18.54-r1.apk"
+printf 'fake' > "$WORK/mixed/$TARGET_BIN/packages/kmod-i2c-mt7621-6.18.54-r1.apk"
+# Not a module: it has to be published too, because the index next to it lists it.
+printf 'fake' > "$WORK/mixed/$TARGET_BIN/packages/base-files-1-r1.apk"
+head -c 4096 /dev/zero > "$WORK/mixed/$TARGET_BIN/openwrt-airoha-en7523-econet_vgp-42x6v1-squashfs-sysupgrade.bin"
+expect_exit 0 "" "$WORK/mixed" --tag v0.2.0 --out "$WORK/mixedrepo"
+MIXED="$WORK/mixedrepo/v0.2.0"
+
+CASES=$((CASES + 1))
+[ -e "$MIXED/kmods/6.18.54/packages.adb" ] \
+	|| fail "the kernel version was not read out of the module file names"
+
+for want in \
+	"$MIXED/kmods/6.18.54/kmod-mt7915e-6.18.54-r1.apk" \
+	"$MIXED/kmods/6.18.54/base-files-1-r1.apk"
+do
+	CASES=$((CASES + 1))
+	[ -e "$want" ] || fail "expected $want to exist (the index lists it)"
+done
+
+CASES=$((CASES + 1))
+"$PYTHON" - "$MIXED/metadata.json" <<'PY' || fail "metadata.json is wrong for the packages/ layout"
+import json, sys
+
+meta = json.load(open(sys.argv[1]))
+assert meta["kernel"] == "6.18.54", meta
+assert meta["kmods"] == "kmods/6.18.54/", meta
+assert meta["source_dir"] == "bin/targets/airoha/en7523/packages", meta
+assert meta["kernel_modules"] == 2, meta
+assert meta["packages_published"] == 3, meta
+PY
+
+CASES=$((CASES + 1))
+grep -q "kmods/6.18.54" "$MIXED/install.md" \
+	|| fail "install.md does not name the published directory"
 
 echo "== an opkg-era tree (Packages) is still accepted"
 mkdir -p "$WORK/opkg/$TARGET_BIN/kmods/5.15.0"

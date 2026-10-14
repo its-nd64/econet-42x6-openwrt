@@ -10,34 +10,43 @@
 # ---------------
 # Kernel modules are the one thing this target cannot install from OpenWrt.
 # target airoha/en7523 is FEATURES:=source-only, which is how OpenWrt's builders
-# decide not to publish a `kmods/` directory for it, and a module is built against
-# one exact kernel: bin/targets/<target>/<subtarget>/kmods/<kernel>-<hash>/.
-# Userspace packages are unaffected -- they depend on the CPU/ABI, not the kernel,
-# so the generic aarch64_cortex-a53 feeds serve this board normally.
+# decide not to publish a package feed for it, and a module is built against one
+# exact kernel.  Userspace packages are unaffected -- they depend on the CPU/ABI,
+# not the kernel, so the generic aarch64_cortex-a53 feeds serve this board
+# normally.
 #
 # So a module that is not already in the image has to come from a repository
 # somebody built against that kernel, and this script writes one.
 #
 # The repository is published per release, under the release tag:
 #
-#   <out>/<tag>/kmods/<kernel>/packages.adb + *.apk     kernel modules
+#   <out>/<tag>/kmods/<kernel>/packages.adb + *.apk     the target's packages
 #   <out>/<tag>/packages/<arch>/<feed>/packages.adb     userspace feeds (opt-in)
 #
 # and the tag in the URL is part of the contract: a user must point apk at the
 # directory that belongs to the image they are running.
 #
-# The layout is discovered rather than assumed.  OpenWrt moved from opkg to apk
-# on main, and the directory names around it are not stable enough to hardcode:
-# this script globs for an index (`packages.adb`, or `Packages` from an opkg
-# tree) and prints exactly what it found, so the first run of a new OpenWrt
-# revision says what changed instead of silently publishing nothing.
+# The layout is discovered rather than assumed, in two senses.  OpenWrt moved from
+# opkg to apk on main, so the file names around it are not stable enough to
+# hardcode; and the kernel modules do not live in the same place in every tree.
+# OpenWrt's builders publish bin/targets/<target>/<subtarget>/kmods/<kernel>-.../,
+# while a plain local build of THIS target leaves them in
+# bin/targets/<target>/<subtarget>/packages/ next to the target's other packages
+# (measured on a real build of this board: 73 packages, among them
+# kmod-xpon-6.18.54-r1.apk, all under `packages/`).  An earlier version of this
+# script required the kmods/ spelling and would have failed a two and a half hour
+# CI run at the last step.
+#
+# Whichever directory is chosen is published whole, because the index in it
+# describes every file beside it: copying a subset would publish an index that
+# lists packages that are not there.
 #
 # Everything is validated before anything is copied: a release directory that is
 # half-written (kmods present, feeds missing) is worse than no directory at all,
 # because the URL in it looks usable.
 #
 # Userspace feeds are opt-in (--with-feeds) because that is where the size is:
-# the kernel modules for this board are a few megabytes, the whole package set is
+# the target's own packages are a few megabytes, the whole package set is
 # hundreds.
 
 set -euo pipefail
@@ -84,39 +93,104 @@ shopt -s nullglob
 # ---------------------------------------------------------------------------
 # (1) Find the kernel modules -- the part that actually needs a repository
 # ---------------------------------------------------------------------------
+index_name() { # index_name <dir> -> the index file name, if the directory has one
+	local cand
+	for cand in packages.adb Packages; do
+		if [ -f "$1/$cand" ]; then
+			echo "$cand"
+			return 0
+		fi
+	done
+	return 1
+}
+
+KMOD_DIR=""
+KMOD_PKGS=()   # everything in the chosen directory: the index describes all of it
+KMOD_FILES=()  # the kernel modules among them
+
+# Two kernels' worth of modules in the tree means a rebuild after a kernel bump.
+# Publishing whichever directory the glob reaches first would serve modules for a
+# kernel nobody is running.
 KMOD_DIRS=("$BIN"/kmods/*/)
-if [ ${#KMOD_DIRS[@]} -eq 0 ]; then
-	echo "!! no kmods directory under $BIN" >&2
-	echo "   expected $TARGET_BIN/kmods/<kernel>/.  Contents of $BIN:" >&2
-	ls -1 "$BIN" >&2
-	exit 1
-fi
 if [ ${#KMOD_DIRS[@]} -gt 1 ]; then
-	echo "!! more than one kmods directory: ${KMOD_DIRS[*]}" >&2
-	echo "   publishing both under their own names would make the URL ambiguous;" >&2
-	echo "   remove the stale one (the build output of an earlier kernel) first." >&2
+	echo "!! more than one kernel under $BIN/kmods: ${KMOD_DIRS[*]}" >&2
+	echo "   publishing both would make the URL ambiguous, and publishing one of" >&2
+	echo "   them may serve modules for a kernel nobody is running; remove the" >&2
+	echo "   stale directory (the output of an earlier kernel) first." >&2
 	exit 1
 fi
-KMOD_DIR="${KMOD_DIRS[0]}"
-KMOD_NAME=$(basename "$KMOD_DIR")
 
-KMOD_INDEX=""
-for cand in packages.adb Packages; do
-	[ -f "$KMOD_DIR$cand" ] && KMOD_INDEX="$cand" && break
+for dir in "$BIN"/kmods/*/ "$BIN/packages/"; do
+	[ -d "$dir" ] || continue
+	index_name "$dir" >/dev/null || continue
+	all=("$dir"*.apk "$dir"*.ipk)
+	[ ${#all[@]} -gt 0 ] || continue
+	# Everything in a kmods/ directory is a module.  A packages/ directory is a
+	# mixed feed, so there the modules have to be named as modules; if none are,
+	# this is not the directory that makes a module installable and we keep
+	# looking rather than publish something that cannot do the job.
+	case "$dir" in
+		*/kmods/*) modules=("${all[@]}") ;;
+		*)         modules=("$dir"kmod-*.apk "$dir"kmod-*.ipk) ;;
+	esac
+	[ ${#modules[@]} -gt 0 ] || continue
+	KMOD_DIR="$dir"
+	KMOD_PKGS=("${all[@]}")
+	KMOD_FILES=("${modules[@]}")
+	break
 done
-if [ -z "$KMOD_INDEX" ]; then
-	echo "!! $KMOD_DIR has no package index (looked for packages.adb, Packages)" >&2
-	echo "   contents:" >&2
-	ls -1 "$KMOD_DIR" | head -20 >&2
-	echo "   If OpenWrt renamed the index again, teach this script the new name." >&2
-	exit 1
-fi
 
-KMOD_PKGS=("$KMOD_DIR"*.apk "$KMOD_DIR"*.ipk)
-if [ ${#KMOD_PKGS[@]} -eq 0 ]; then
-	echo "!! $KMOD_DIR has an index ($KMOD_INDEX) but no package files" >&2
+if [ -z "$KMOD_DIR" ]; then
+	echo "!! no directory with a package index and kernel modules under $BIN" >&2
+	echo "   looked at:" >&2
+	printf '     %s\n' "$BIN"/kmods/*/ "$BIN/packages/" >&2
+	echo "   contents of $BIN:" >&2
+	ls -1 "$BIN" >&2
+	echo "   If this tree puts its packages somewhere else again, teach this" >&2
+	echo "   script the location instead of guessing from this listing." >&2
 	exit 1
 fi
+KMOD_INDEX=$(index_name "$KMOD_DIR")
+
+# The kernel version names the directory users point apk at, so it has to be
+# right.  A kmods/<kernel>/ directory states it; a mixed packages/ directory only
+# states it in the file names, kmod-<module>-<kernel>-r<release>.apk.
+KMOD_NAME=""
+LAYOUT="kmods/<kernel>/"
+case "$KMOD_DIR" in
+	*/kmods/*) KMOD_NAME=$(basename "$KMOD_DIR") ;;
+esac
+if [ -z "$KMOD_NAME" ]; then
+	LAYOUT="packages/"
+	VERSIONS=()
+	for f in "${KMOD_FILES[@]}"; do
+		base=$(basename "$f")
+		base=${base%.apk}
+		base=${base%.ipk}
+		v=$(printf '%s\n' "$base" | sed -n 's/.*-\([0-9][0-9A-Za-z.~]*\)-r[0-9][0-9A-Za-z.]*$/\1/p')
+		[ -n "$v" ] && VERSIONS+=("$v")
+	done
+	if [ ${#VERSIONS[@]} -eq 0 ]; then
+		echo "!! cannot read a kernel version from the module file names in $KMOD_DIR" >&2
+		printf '     %s\n' "${KMOD_FILES[@]:0:8}" >&2
+		echo "   expected kmod-<module>-<kernel>-r<release>.apk" >&2
+		exit 1
+	fi
+	UNIQ=$(printf '%s\n' "${VERSIONS[@]}" | sort -u)
+	if [ "$(printf '%s\n' "$UNIQ" | wc -l)" -ne 1 ]; then
+		echo "!! $KMOD_DIR holds kernel modules for more than one kernel:" >&2
+		printf '     %s\n' $UNIQ >&2
+		echo "   A module only loads into the kernel it was built against, so this" >&2
+		echo "   directory cannot be published as one repository.  Build the tree" >&2
+		echo "   from clean, or remove the modules of the kernel you do not want." >&2
+		exit 1
+	fi
+	KMOD_NAME="$UNIQ"
+fi
+KMOD_SOURCE=${KMOD_DIR#"$OWRT"/}
+# The directory keeps its trailing slash for globbing, but the path recorded in
+# metadata.json should not.
+KMOD_SOURCE=${KMOD_SOURCE%/}
 
 # ---------------------------------------------------------------------------
 # (2) Find the userspace feeds -- opt-in, because this is where the size is
@@ -150,7 +224,7 @@ fi
 # ---------------------------------------------------------------------------
 mkdir -p "$DEST/kmods/$KMOD_NAME"
 cp -v "$KMOD_DIR"* "$DEST/kmods/$KMOD_NAME/" >&2
-echo "==> kmods: ${#KMOD_PKGS[@]} package(s) from $KMOD_NAME (index: $KMOD_INDEX)"
+echo "==> ${#KMOD_FILES[@]} kernel module(s) for $KMOD_NAME, plus $(( ${#KMOD_PKGS[@]} - ${#KMOD_FILES[@]} )) other package(s), from $KMOD_SOURCE (index: $KMOD_INDEX)"
 
 for feed in ${FEEDS[@]+"${FEEDS[@]}"}; do
 	mkdir -p "$DEST/packages/$ARCH/$feed"
@@ -181,11 +255,12 @@ PY
 fi
 
 "$PYTHON" - "$DEST/metadata.json" "$TAG" "$KMOD_NAME" "$ARCH" "${#FEEDS[@]}" "$KMOD_INDEX" "$IMAGES" \
-	"$TARGET" "$SUBTARGET" "$OPENWRT_COMMIT" "$OPENWRT_DESCRIBE" <<'PY'
+	"$TARGET" "$SUBTARGET" "$OPENWRT_COMMIT" "$OPENWRT_DESCRIBE" "$KMOD_SOURCE" \
+	"${#KMOD_FILES[@]}" "${#KMOD_PKGS[@]}" <<'PY'
 import datetime, json, sys
 
 (dest, tag, kmod, arch, feeds, index, images,
- target, subtarget, commit, describe) = sys.argv[1:12]
+ target, subtarget, commit, describe, source, modules, packages) = sys.argv[1:15]
 data = {
     "tag": tag,
     "target": target,
@@ -195,6 +270,12 @@ data = {
     "kernel": kmod,
     "kmods": "kmods/%s/" % kmod,
     "index": index,
+    # Where on the build tree this came from, because the directory name differs
+    # between a builder's tree (kmods/<kernel>-<release>-<magic>/) and a local one
+    # (packages/, modules and the target's other packages side by side).
+    "source_dir": source,
+    "kernel_modules": int(modules),
+    "packages_published": int(packages),
     "userspace_arch": arch,
     "userspace_feeds": int(feeds),
     "images": json.loads(images),
@@ -214,9 +295,15 @@ SITE="$BASE_URL"
 RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY:-realldz/econet-42x6-openwrt}/gh-pages"
 
 cat > "$DEST/install.md" <<EOF
-# Kernel modules for $TAG
+# Packages for $TAG
 
-Built from OpenWrt \`$OPENWRT_COMMIT\` ($OPENWRT_DESCRIBE), kernel \`$KMOD_NAME\`.
+Built from OpenWrt \`$OPENWRT_COMMIT\` ($OPENWRT_DESCRIBE), kernel \`$KMOD_NAME\`,
+taken from \`$KMOD_SOURCE\` on the build tree.
+
+That directory is published whole: it holds the kernel modules for this kernel
+(${#KMOD_FILES[@]} of them) and the rest of this target's packages, and \`$KMOD_INDEX\`
+lists all of them.  OpenWrt itself publishes no feed for this board -- the target
+is \`source-only\` -- which is why the modules have to come from here.
 
 **The URL contains the release tag on purpose.**  A kernel module only loads into
 the kernel it was built against, so these packages belong to the images published
@@ -301,12 +388,13 @@ cat > "$OUT/index.html" <<EOF
 </style>
 </head>
 <body>
-<h1>Kernel modules for the Econet vGP-42X6V1</h1>
+<h1>Packages for the Econet vGP-42X6V1</h1>
 <p>
- OpenWrt's <code>airoha/en7523</code> target is <code>source-only</code>, so no
- <code>kmods/</code> directory is published for this board and a kernel module
- cannot be installed from downloads.openwrt.org.  This branch carries a
- repository per release instead.  Userspace packages are unaffected: they come
+ OpenWrt's <code>airoha/en7523</code> target is <code>source-only</code>, so
+ OpenWrt publishes no package feed for this board and a kernel module cannot be
+ installed from downloads.openwrt.org.  This branch carries a repository per
+ release instead, holding the target's own packages and the kernel modules built
+ against that release's kernel.  Userspace packages are unaffected: they come
  from the generic <code>aarch64_cortex-a53</code> feeds as usual.
 </p>
 <p><a href="releases.json">releases.json</a> lists every published release with

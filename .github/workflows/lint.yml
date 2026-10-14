@@ -99,6 +99,27 @@ jobs:
           mapfile -t patches < <(git ls-files '*.patch')
           python3 tools/check_patches.py "${patches[@]}"
 
+      - name: The patch series applies to the pinned tree
+        run: |
+          set -e
+          # Well-formed is not the same as applicable.  A hunk can have correct
+          # counts and context lines that are all present in a clean tree and still
+          # be refused by `git apply` -- 0006 was exactly that -- because a patch
+          # written in a tree that had already drifted carries that tree's line
+          # numbers and block positions, not only its text.  Everything the series
+          # touches is public, so fetch it at the pin and replay the series the way
+          # apply-overlay.sh does, in order.  This is the check that would have
+          # saved the second CI run; it takes about ten seconds.
+          python3 tools/check_patches_apply.py
+
+      - name: The patch-appliance gate refuses a patch that cannot apply
+        run: |
+          set -e
+          # A gate that always prints "the series applies" is worse than no gate:
+          # it would have said that about the series that failed CI.  This plants a
+          # patch that cannot apply and checks that the gate refuses it, by name.
+          PYTHON=python3 tools/test_check_patches_apply.sh
+
       - name: Patches are well-formed unified diffs
         run: |
           set -e
