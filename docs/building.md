@@ -46,17 +46,29 @@ The patch series has exact context lines, so it only applies to one revision.
 That revision is recorded in [`scripts/pin.env`](../scripts/pin.env).
 
 ```bash
-git clone https://github.com/openwrt/openwrt.git openwrt
-git -C openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
+git clone https://github.com/openwrt/openwrt.git ../openwrt
+git -C ../openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
 ```
+
+Keep the tree outside this repository. The destination directory cannot be called
+`openwrt` *inside* the checkout, because this project already has a top-level
+`openwrt/` directory holding the board support, and cloning into it fails with
+`destination path 'openwrt' already exists and is not an empty directory`. The
+name of the destination does not matter to any of the scripts -- they all take
+the tree as an argument -- so put it wherever you keep sources.
 
 A shallow clone is not enough if you intend to regenerate the patch series,
 because `make-patches.py export` reads files straight out of git:
 
 ```bash
-git clone --filter=blob:none https://github.com/openwrt/openwrt.git openwrt
-git -C openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
+git clone --filter=blob:none https://github.com/openwrt/openwrt.git ../openwrt
+git -C ../openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
 ```
+
+`git -C ../openwrt rev-parse HEAD` has to print the pinned revision:
+`apply-overlay.sh` refuses to touch a tree at any other revision -- and
+`build-firmware.sh` runs it, so a source build refuses too -- because a series with
+exact context lines would either fail to apply or, worse, apply in the wrong place.
 
 ---
 
@@ -220,11 +232,33 @@ Useful flags:
 | `--packages FILE` | seed `FILE` instead of either list |
 | `--debug-kmods` | install `kmod-pciedbg` and `kmod-ringwatch` into the image |
 | `--no-packages` | seed no package list at all into `.config` |
+| `--no-feeds` | do not run `./scripts/feeds update -a` / `install -a` first |
 | `--with-pon` | also apply the stage 2 PON patches (not functional yet) |
 | `--mt76-debug` | also apply the diagnostic mt76 ring patch (never ship it) |
 | `--imagebuilder` | also produce the Image Builder tarball |
 | `--no-apply` | skip step 2, if the overlay is already in the tree |
 | `-j N` | build parallelism |
+
+### Feeds are fetched for you, and they float
+
+A fresh clone of OpenWrt has no `feeds/` directory at all, and everything this
+board wants beyond the bare system -- LuCI, the AP daemon, `iperf3`, `i2c-tools`
+-- comes from one. Before feeds are installed, `make defconfig` drops
+`CONFIG_PACKAGE_luci` without a word and the image is built with no web UI; on
+this board's own tree the state was measurably worse than that: `feeds/` held
+only `base`, `grep -E '^CONFIG_FEED_' .config` was empty, and `feeds/luci` did
+not exist, so LuCI could not be enabled at all `[hardware]`.
+
+The script therefore runs `./scripts/feeds update -a` and `./scripts/feeds
+install -a` when `feeds/luci` is missing, and prints the revision each feed
+resolved to. **Those revisions are not pinned by `scripts/pin.env`** -- the feeds
+follow their own branch heads, so a rebuild months later gets newer feed packages
+against the same kernel and the same patches. When the luci feed was last checked
+it sat 3 days ahead of the pinned tree (`0257cc05`, 2026-10-05, against
+`9b95be9`, 2026-10-02), which was judged acceptable; a rebuild that behaves
+differently from the one described here should start by comparing those lines.
+Pass `--no-feeds` only when you have installed feeds yourself and mean to keep
+them.
 
 The script verifies after `make defconfig` that every symbol it seeded is still in
 `.config`, and refuses to build if one was dropped -- `defconfig` discards a symbol
@@ -242,12 +276,24 @@ The build succeeds either way, which is what makes the mistake silent: an inflat
 kernel means a larger derived kernel partition, so the split still mounts -- the
 damage is a needlessly huge image whose kernel boots its own embedded rootfs rather
 than the flash rootfs, so nothing would persist `[not verified]`.
-[`tools/verify_image.py`](../tools/verify_image.py) therefore validates the
-squashfs superblock of every sysupgrade image and reports when the offset shows an
-inflated kernel: `build-firmware.sh` calls it in a warn-only mode (because
-`--initramfs` is the default), and CI calls it as a hard gate before publishing a
-release, so an image that cannot be split is never handed out. Build with
-`--no-initramfs` when you only want the persistent image, and check with
+
+Three things now stand between you and that image:
+
+* `--no-initramfs` does not merely omit the symbol, it writes
+  `# CONFIG_TARGET_ROOTFS_INITRAMFS is not set`, and the check after `make
+  defconfig` verifies it stayed that way. Omitting it was not enough: a `=y` left
+  behind by an earlier build survives `defconfig`, and that is how the 12 MB image
+  above was produced.
+* `build-imagebuilder.sh` always appends `--no-initramfs` last, so the kernel the
+  Image Builder bundles is the plain one -- every image it produces would otherwise
+  inherit an embedded initramfs.
+* [`tools/verify_image.py`](../tools/verify_image.py) validates the squashfs
+  superblock of every sysupgrade image and reports an offset that shows an inflated
+  kernel. `build-firmware.sh` calls it in warn-only mode (a `--initramfs` build
+  legitimately produces one) and CI calls it as a hard gate, so such an image is
+  never published.
+
+Build with `--no-initramfs` when you only want the persistent image, and check with
 [sysupgrade.md](sysupgrade.md), "verify a build before flashing it".
 
 The whole image also has to stay inside slot B, **`0x2800000` (41,943,040 bytes)**,
@@ -272,7 +318,8 @@ cat >> .config <<'EOF'
 CONFIG_TARGET_airoha=y
 CONFIG_TARGET_airoha_en7523=y
 CONFIG_TARGET_airoha_en7523_DEVICE_econet_vgp-42x6v1=y
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
+# deliberately not here: CONFIG_TARGET_ROOTFS_INITRAMFS=y is what --initramfs
+# adds, and it is what inflates the persistent image -- see above
 CONFIG_KERNEL_DEVTMPFS=y
 CONFIG_KERNEL_DEVTMPFS_MOUNT=y
 CONFIG_PACKAGE_wpad-mbedtls=y

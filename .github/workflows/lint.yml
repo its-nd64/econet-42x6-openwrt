@@ -66,6 +66,18 @@ jobs:
           # without needing an OpenWrt tree.
           PYTHON=python3 tools/test_publish_packages.sh
 
+      - name: The config seeding helpers behave as the gate expects
+        run: |
+          set -e
+          # build-firmware.sh clears CONFIG_TARGET_ROOTFS_INITRAMFS for
+          # --no-initramfs, and the check after `make defconfig` greps for the
+          # exact line it wrote.  If those two spellings ever disagree the build
+          # stops with a complaint about a symbol it had just written itself --
+          # and the stale `=y` this replaced is what produced a 12 MB sysupgrade
+          # image (docs/sysupgrade.md).  It runs in under a second and needs no
+          # OpenWrt tree.
+          tools/test_build_firmware.sh
+
       - name: ShellCheck
         run: |
           sudo apt-get update -qq

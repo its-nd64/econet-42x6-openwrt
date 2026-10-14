@@ -201,15 +201,23 @@ fall back on. The price is a large tarball. Details:
 On Linux, WSL or Docker (OpenWrt cannot be built on Windows itself):
 
 ```bash
-git clone https://github.com/openwrt/openwrt.git openwrt
-git -C openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
+git clone https://github.com/openwrt/openwrt.git ../openwrt
+git -C ../openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
 
-./scripts/build-firmware.sh openwrt --variant m2 --initramfs
+./scripts/build-firmware.sh ../openwrt --variant m2 --initramfs
 ```
+
+Clone OpenWrt **outside** this repository, not into it: this project has its own
+top-level `openwrt/` directory (the board support), so `git clone ... openwrt`
+here fails with `destination path 'openwrt' already exists and is not an empty
+directory` -- which is how the first CI run of this repository died, before it
+built anything. Any path works as long as `build-firmware.sh` is given it.
 
 The pinned revision lives in [`scripts/pin.env`](scripts/pin.env). The script
 verifies the tree is at that revision, refuses otherwise, applies the patches,
-seeds `.config`, and builds. Artifacts land in `bin/targets/airoha/en7523/`:
+installs the feeds if they are missing (LuCI and the AP daemon live in feeds, and
+a fresh clone has none), seeds `.config`, and builds. Artifacts land in
+`bin/targets/airoha/en7523/`:
 
 | Artifact | Use |
 |---|---|
@@ -230,7 +238,7 @@ Two options decide what goes in:
   [Six things that will bite you](#six-things-that-will-bite-you).
 
 Add `--imagebuilder` to also produce the Image Builder tarball, or run
-`./scripts/build-imagebuilder.sh openwrt -j8`. Full build documentation,
+`./scripts/build-imagebuilder.sh ../openwrt -j8`. Full build documentation,
 including the mandatory kernel options, package seeding and how to bump the
 pinned revision: [`docs/building.md`](docs/building.md).
 

@@ -106,13 +106,17 @@ jobs:
   # Both jobs are the same build.yml; they differ only in which image kind they
   # produce.  They run in parallel on separate runners, so the wall-clock cost is
   # one build rather than two.
+  #
+  # The Image Builder belongs to the sysupgrade job, not this one: the tarball
+  # bundles the kernel that was just built, so building it from a --initramfs tree
+  # would give every image it produces a kernel with the initramfs embedded in it.
   initramfs:
     needs: resolve
     uses: ./.github/workflows/build.yml
     with:
       variant: ${{ needs.resolve.outputs.variant }}
       images: initramfs
-      imagebuilder: true
+      imagebuilder: false
       upload: true
       tag: ${{ needs.resolve.outputs.tag }}
 
@@ -122,7 +126,7 @@ jobs:
     with:
       variant: ${{ needs.resolve.outputs.variant }}
       images: sysupgrade
-      imagebuilder: false
+      imagebuilder: true
       upload: true
       tag: ${{ needs.resolve.outputs.tag }}
       feeds: ${{ needs.resolve.outputs.feeds == 'true' }}

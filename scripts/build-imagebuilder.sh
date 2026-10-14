@@ -7,6 +7,13 @@
 # This is a thin wrapper around build-firmware.sh that also sets CONFIG_IB and
 # CONFIG_IB_STANDALONE.  All other options are forwarded, e.g. -j 8.
 #
+# It always builds with --no-initramfs, and that flag is applied last so that
+# nothing can override it: the tarball bundles the prebuilt kernel, so a kernel
+# with the initramfs embedded in it would inflate every image the Image Builder
+# ever produces (MEASURED through the source path: 12,058,913 B with the squashfs
+# at 0x760000, against 9,437,473 B at 0x3A0000 -- see docs/building.md, "The
+# initramfs flag also inflates the persistent image").
+#
 # Why this exists
 # ---------------
 # OpenWrt's upstream Image Builder cannot build a working image for this board,
@@ -54,7 +61,8 @@ if [ -z "$OWRT_ARG" ]; then
 fi
 OWRT=$(cd "$OWRT_ARG" && pwd)
 
-"$HERE/build-firmware.sh" "$OWRT" --imagebuilder "${ARGS[@]+"${ARGS[@]}"}"
+echo "==> Image Builder: the bundled kernel is built with --no-initramfs"
+"$HERE/build-firmware.sh" "$OWRT" --imagebuilder "${ARGS[@]+"${ARGS[@]}"}" --no-initramfs
 
 BIN="$OWRT/$TARGET_BIN"
 shopt -s nullglob

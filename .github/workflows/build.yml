@@ -104,6 +104,15 @@ jobs:
       images: ${{ inputs.images }}
       tag: ${{ steps.meta.outputs.tag }}
 
+    # The OpenWrt tree is fetched OUTSIDE the checked-out workspace, and that is
+    # not a style choice: this repository contains a top-level directory called
+    # `openwrt/` (the board support), so `git clone ... openwrt` inside the
+    # checkout dies with
+    #     fatal: destination path 'openwrt' already exists and is not an empty directory
+    # which is how the first run of this workflow failed, before it built anything.
+    env:
+      OWRT_DIR: ${{ runner.temp }}/openwrt-build
+
     steps:
       - uses: actions/checkout@v4
 
@@ -147,12 +156,33 @@ jobs:
           sudo apt-get clean
           df -h / | tail -1
 
-      - name: Clone OpenWrt at the pinned revision
+      # Retried on purpose: two of these run at once (release.yml calls this
+      # workflow twice), and a transient failure here is cheap to retry and
+      # expensive to lose -- the same run failing cost nothing but the first run
+      # of this workflow proved that a plain `git clone` is a single point of
+      # failure for a 2-3 hour job.
+      - name: Fetch OpenWrt at the pinned revision
+        env:
+          COMMIT: ${{ steps.pin.outputs.commit }}
         run: |
           set -e
-          git clone --filter=blob:none \
-            https://github.com/openwrt/openwrt.git openwrt
-          git -C openwrt checkout "${{ steps.pin.outputs.commit }}"
+          . scripts/pin.env
+          df -h / | tail -1
+          rm -rf "$OWRT_DIR"
+          for attempt in 1 2 3; do
+            echo "==> git clone attempt $attempt"
+            if git clone --filter=blob:none "$OPENWRT_REPO" "$OWRT_DIR"; then
+              break
+            fi
+            rm -rf "$OWRT_DIR"
+            if [ "$attempt" = 3 ]; then
+              echo "!! could not fetch OpenWrt after 3 attempts"
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
+          git -C "$OWRT_DIR" checkout "$COMMIT"
+          git -C "$OWRT_DIR" log -1 --format='%H %ad %s' --date=short
 
       # Caching the download archive saves the bulk of the network time on
       # repeat builds. staging_dir is deliberately not cached: it is enormous
@@ -160,7 +190,7 @@ jobs:
       - name: Cache OpenWrt downloads
         uses: actions/cache@v4
         with:
-          path: openwrt/dl
+          path: ${{ env.OWRT_DIR }}/dl
           key: owrt-dl-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/pin.env') }}
           restore-keys: |
             owrt-dl-${{ steps.pin.outputs.commit }}-
@@ -172,7 +202,7 @@ jobs:
           IN_IB: ${{ inputs.imagebuilder }}
         run: |
           set -e
-          args=(openwrt --variant "$IN_VARIANT" -j"$(nproc)")
+          args=("$OWRT_DIR" --variant "$IN_VARIANT" -j"$(nproc)")
           if [ "$IN_IMAGES" = "initramfs" ]; then
             args+=(--initramfs)
           else
@@ -196,8 +226,10 @@ jobs:
         run: |
           set -e
           shopt -s nullglob
+          . scripts/pin.env
+          BIN="$OWRT_DIR/$TARGET_BIN"
           if [ "$IN_IMAGES" = "sysupgrade" ]; then
-            imgs=(openwrt/bin/targets/airoha/en7523/*-sysupgrade.bin)
+            imgs=("$BIN"/*-sysupgrade.bin)
             [ ${#imgs[@]} -gt 0 ] || { echo "!! the build produced no sysupgrade image"; exit 1; }
             for img in "${imgs[@]}"; do
               python3 tools/verify_build.py "$img"
@@ -205,7 +237,7 @@ jobs:
             # Hard gate: this is the image somebody is about to flash.
             python3 tools/verify_image.py "${imgs[@]}"
           else
-            imgs=(openwrt/bin/targets/airoha/en7523/*-initramfs-kernel.bin)
+            imgs=("$BIN"/*-initramfs-kernel.bin)
             [ ${#imgs[@]} -gt 0 ] || { echo "!! the build produced no initramfs image"; exit 1; }
             for img in "${imgs[@]}"; do
               python3 tools/verify_build.py "$img"
@@ -220,19 +252,23 @@ jobs:
         run: |
           set -e
           shopt -s nullglob
+          . scripts/pin.env
+          BIN="$OWRT_DIR/$TARGET_BIN"
           mkdir -p out
           if [ "$IN_IMAGES" = "sysupgrade" ]; then
-            # Only the persistent image.  The initramfs image of a build that did
-            # not ask for one is not something to hand out by accident.
-            cp -v openwrt/bin/targets/airoha/en7523/*-sysupgrade.bin out/
+            # Only the persistent image.  A build that did not ask for an
+            # initramfs image should not hand one out by accident either.
+            cp -v "$BIN"/*-sysupgrade.bin out/
           else
-            cp -v openwrt/bin/targets/airoha/en7523/*-initramfs-kernel.bin out/
+            cp -v "$BIN"/*-initramfs-kernel.bin out/
           fi
-          cp -v openwrt/bin/targets/airoha/en7523/*.manifest out/ 2>/dev/null || true
+          cp -v "$BIN"/*.manifest out/ 2>/dev/null || true
           if [ "$IN_IB" = "true" ]; then
-            # dist/ is where build-imagebuilder.sh copies the tarball.
-            tarballs=(dist/*.tar.zst)
-            [ ${#tarballs[@]} -gt 0 ] || { echo "!! CONFIG_IB was requested but dist/ has no tarball"; exit 1; }
+            # build-firmware.sh --imagebuilder leaves the tarball beside the
+            # images; only build-imagebuilder.sh copies it to dist/.  Collecting
+            # from dist/ is what made this step fail the first time it ran.
+            tarballs=("$BIN"/openwrt-imagebuilder-*.tar.zst)
+            [ ${#tarballs[@]} -gt 0 ] || { echo "!! --imagebuilder was requested but $BIN has no tarball"; exit 1; }
             cp -v "${tarballs[@]}" out/
           fi
           cd out
@@ -249,7 +285,7 @@ jobs:
           IN_FEEDS: ${{ inputs.feeds }}
         run: |
           set -e
-          args=(openwrt --tag "$TAG" --out pages)
+          args=("$OWRT_DIR" --tag "$TAG" --out pages)
           if [ "$IN_FEEDS" = "true" ]; then
             args+=(--with-feeds)
           fi

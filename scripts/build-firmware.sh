@@ -18,6 +18,7 @@
 #                             own factory partition -- see docs/pon-port.md.
 #   --packages FILE    seed FILE instead of the variant's own list
 #   --no-packages      do not seed any package list into .config
+#   --no-feeds         do not run ./scripts/feeds update/install
 #   --with-pon         apply the stage 2 xPON patches (NOT functional yet)
 #   --mt76-debug       also apply the diagnostic mt76 patch (never ship this)
 #   --imagebuilder     additionally produce the self-contained Image Builder
@@ -39,6 +40,7 @@ INITRAMFS=1
 DEBUG_KMODS=0
 WITH_PON=0
 WITH_PACKAGES=1
+WITH_FEEDS=1
 MT76_DEBUG=0
 IMAGEBUILDER=0
 DO_APPLY=1
@@ -53,6 +55,7 @@ while [ $# -gt 0 ]; do
 		--no-initramfs) INITRAMFS=0 ;;
 		--debug-kmods)  DEBUG_KMODS=1 ;;
 		--no-packages)  WITH_PACKAGES=0 ;;
+		--no-feeds)     WITH_FEEDS=0 ;;
 		--variant)      VARIANT="${2:?--variant needs m2 or full}"; shift ;;
 		--packages)     PKGS_FILE="${2:?--packages needs a file}"; shift ;;
 		--with-pon)     WITH_PON=1 ;;
@@ -94,7 +97,44 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (2) Seed .config
+# (2) Feeds
+#
+# A fresh clone of OpenWrt has no feeds/ directory at all, and everything this
+# board wants beyond the bare system -- LuCI, the AP daemon, iperf3, i2c-tools --
+# lives in one of them.  Left alone, `make defconfig` drops CONFIG_PACKAGE_luci
+# without complaining and the image comes out with no web UI at all; the gate
+# after defconfig below exists to catch exactly that.  Measured on this board's
+# own tree before feeds were installed: feeds/ held only `base`,
+# `grep -E '^CONFIG_FEED_' .config` was empty, and feeds/luci did not exist, so
+# LuCI could not be enabled at all.
+#
+# The feeds follow their own branch heads rather than the revision pinned in
+# pin.env, so a rebuild months later picks up newer feed packages.  The revisions
+# actually used are printed below and belong in any bug report.
+# ---------------------------------------------------------------------------
+if [ "$WITH_FEEDS" = "1" ]; then
+	if [ -d "$OWRT/feeds/luci" ] && [ -d "$OWRT/package/feeds/luci" ]; then
+		echo "==> Feeds already installed, leaving them alone"
+	else
+		echo "==> ./scripts/feeds update -a && ./scripts/feeds install -a"
+		( cd "$OWRT" && ./scripts/feeds update -a && ./scripts/feeds install -a )
+	fi
+	if [ -d "$OWRT/feeds" ]; then
+		echo "    feed revisions in use:"
+		for f in "$OWRT"/feeds/*/; do
+			[ -d "$f/.git" ] || continue
+			printf '      %-12s %s\n' "$(basename "$f")" \
+				"$(git -C "$f" log -1 --format='%h %ad' --date=short 2>/dev/null || echo '?')"
+		done
+	fi
+	echo
+else
+	echo "==> --no-feeds: not touching $OWRT/feeds"
+	echo
+fi
+
+# ---------------------------------------------------------------------------
+# (3) Seed .config
 #
 # set_cfg() replaces an existing assignment, un-comments an existing
 # "# CONFIG_X is not set" line, or appends.  Appending blindly would leave
@@ -124,6 +164,21 @@ set_cfg() {
 	echo "    ${key}=${val}"
 }
 
+# Turn a bool off, in the spelling kconfig itself uses.  `CONFIG_FOO=n` is valid
+# input but `make defconfig` rewrites it to `# CONFIG_FOO is not set`, so that is
+# what has to be written here and what the check further down has to look for --
+# seeding `=n` would make the symbol look like it never survived.
+set_cfg_off() {
+	local key="$1"
+	if grep -q "^${key}=" "$CFG"; then
+		sed -i "s|^${key}=.*|# ${key} is not set|" "$CFG"
+	elif ! grep -q "^# ${key} is not set" "$CFG"; then
+		printf '# %s is not set\n' "$key" >> "$CFG"
+	fi
+	printf '# %s is not set\n' "$key" >> "$SEEDED"
+	echo "    # ${key} is not set"
+}
+
 echo "==> Seeding $CFG"
 set_cfg "CONFIG_TARGET_${TARGET}" "y"
 set_cfg "CONFIG_TARGET_${TARGET}_${SUBTARGET}" "y"
@@ -138,6 +193,18 @@ if [ "$INITRAMFS" = "1" ]; then
 	# post-build check below warns about it; build with --no-initramfs when you
 	# only want the persistent image.
 	set_cfg "CONFIG_TARGET_ROOTFS_INITRAMFS" "y"
+else
+	# Clear it actively rather than merely not setting it.  An earlier --initramfs
+	# build leaves `CONFIG_TARGET_ROOTFS_INITRAMFS=y` in .config, defconfig keeps
+	# it, and the update-sysupgrade image then carries a kernel with the initramfs
+	# embedded in it: MEASURED 12,058,913 B with the squashfs at 0x760000 against
+	# 9,437,473 B at 0x3A0000.  Not setting the symbol is how that image was
+	# produced, and docs/sysupgrade.md recorded the hole without closing it.
+	#
+	# CONFIG_TARGET_INITRAMFS_COMPRESSION_NONE does not need clearing with it:
+	# that option only decides how an initramfs is compressed once one is being
+	# embedded at all, and it is what turned the 12.0 MB case into 14.4 MB.
+	set_cfg_off "CONFIG_TARGET_ROOTFS_INITRAMFS"
 fi
 
 if [ "$DEBUG_KMODS" = "1" ]; then
@@ -198,7 +265,7 @@ if [ "$WITH_PACKAGES" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# (3) Build
+# (4) Build
 # ---------------------------------------------------------------------------
 echo
 echo "==> make defconfig"
@@ -235,7 +302,7 @@ echo "==> make -j$JOBS"
 ( cd "$OWRT" && make -j"$JOBS" )
 
 # ---------------------------------------------------------------------------
-# (4) Report
+# (5) Report
 # ---------------------------------------------------------------------------
 echo
 echo "==> Artifacts in $TARGET_BIN"
@@ -252,7 +319,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# (4b) Sanity-check the sysupgrade image
+# (5b) Sanity-check the sysupgrade image
 #
 # The persistent image must carry the PLAIN kernel.  When the same tree also
 # builds an initramfs image (--initramfs, on by default), the kernel can end up
@@ -261,6 +328,12 @@ fi
 # 12,058,913 B with the squashfs at 0x760000, instead of 9,437,473 B with the
 # squashfs at 0x3A0000.  The two kernel Images of that build had the same md5,
 # which is what identifies it.
+#
+# --no-initramfs now clears CONFIG_TARGET_ROOTFS_INITRAMFS instead of only
+# leaving it alone, so an inflated image here is no longer the flag's doing: it
+# means the kernel was not actually rebuilt (an incremental build that kept a
+# stale arch/arm/boot/Image), or that the tree carries an initramfs of its own
+# under target/linux.  Both are worth stopping for.
 #
 # What the check measures: `mtdsplit_fit` derives the kernel partition as
 # round_up(FIT totalsize, erase block) and then finds the rootfs by scanning for

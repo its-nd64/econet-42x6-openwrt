@@ -63,6 +63,13 @@ Producer side:
 # -> copy of dist/openwrt-imagebuilder-airoha-en7523.*.tar.zst
 ```
 
+`build-imagebuilder.sh` always builds with `--no-initramfs`, and appends the flag
+last so that nothing can override it. The tarball bundles the prebuilt kernel, so
+an Image Builder built from a `--initramfs` tree would give every image it ever
+produces a kernel with the initramfs embedded in it -- the 12 MB,
+`hsqs`-at-`0x760000` case in [building.md](building.md). The
+`*-initramfs-kernel.bin` for RAM boot comes from a source build, not from here.
+
 The tarball name follows OpenWrt's own scheme:
 
 ```

@@ -296,11 +296,15 @@ rootfs, so nothing would persist across a reboot `[not verified]` -- it was neve
 measured is the size, the offset and the identical kernel md5s.
 
 Clearing `CONFIG_TARGET_ROOTFS_INITRAMFS` brought the image back to 9,437,473 bytes with `hsqs` at
-`0x3A0000`. Note that [`scripts/build-firmware.sh`](../scripts/build-firmware.sh) *adds* that symbol for
-`--initramfs` (the default) and never removes it, so a stale `=y` survives a later `--no-initramfs`. The
-script now checks every sysupgrade image it produced and prints the offset it found: it validates the
-**squashfs superblock** at each `hsqs` it sees and not just the magic, because the kernel `Image` here is
-uncompressed and a stray `hsqs` inside it would otherwise mask an inflated kernel.
+`0x3A0000`. That clearing used to be manual, and the hole it left was real:
+[`scripts/build-firmware.sh`](../scripts/build-firmware.sh) *added* the symbol for `--initramfs` (the
+default) and never removed it, so a stale `=y` survived a later `--no-initramfs` -- which is how the
+12.0 MB image above was produced. `--no-initramfs` now writes
+`# CONFIG_TARGET_ROOTFS_INITRAMFS is not set` instead of merely omitting it, and the check after `make
+defconfig` fails the build if the symbol comes back. The script also checks every sysupgrade image it
+produced and prints the offset it found: it validates the **squashfs superblock** at each `hsqs` it sees
+and not just the magic, because the kernel `Image` here is uncompressed and a stray `hsqs` inside it
+would otherwise mask an inflated kernel.
 
 ```sh
 python3 tools/verify_build.py <image>    # FIT load/entry against the kernel's _text link
