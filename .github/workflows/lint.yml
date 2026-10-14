@@ -47,12 +47,45 @@ jobs:
           find . -name '__pycache__' -type d -prune -exec rm -rf {} +
           exit $fail
 
+      - name: Workflows are valid, and so is the shell inside them
+        run: |
+          set -e
+          # A typo in a workflow is not reported until the workflow runs, and one
+          # run of the build costs 2-3 hours.  This also runs `bash -n` over every
+          # `run:` block, so an unclosed `if` in a step full of heredocs is caught
+          # here instead of after the build.
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 tools/check_workflows.py .
+
+      - name: The package publisher behaves as documented
+        run: |
+          set -e
+          # scripts/publish-packages.sh writes the directory other people point
+          # apk at, and it runs in CI straight after a two-hour build.  This
+          # exercises its failure paths and the layout it produces in seconds,
+          # without needing an OpenWrt tree.
+          PYTHON=python3 tools/test_publish_packages.sh
+
       - name: ShellCheck
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
           # advisory only: these scripts are written for bash, not POSIX sh
           shellcheck --shell=bash --severity=warning $(git ls-files '*.sh') || true
+
+      - name: Patch hunk headers match their bodies
+        run: |
+          set -e
+          # `git apply --stat` is NOT enough.  When a hunk header under-counts,
+          # git reads only as many body lines as the header promised and exits
+          # 0 for the leftover -- it reported 49 insertions for a 52-line body
+          # and said nothing.  The patch then applies "cleanly" while silently
+          # dropping the tail of the hunk: that is how CONFIG_I2C_MT7621=y, the
+          # line that makes the I2C controller exist, went missing while every
+          # check stayed green.  check_patches.py counts the body and names the
+          # hunk, instead of only checking that the file parses.
+          mapfile -t patches < <(git ls-files '*.patch')
+          python3 tools/check_patches.py "${patches[@]}"
 
       - name: Patches are well-formed unified diffs
         run: |
@@ -66,6 +99,27 @@ jobs:
               fail=1
             fi
           done < <(git ls-files '*.patch')
+          exit $fail
+
+      - name: Patches carry no whitespace damage
+        run: |
+          set -e
+          # A trailing space on a context line is invisible and legal, but a
+          # context line that lost its leading space is not: git then reads it
+          # as a new header.  `--check` reports that as "corrupt patch".
+          mapfile -t patches < <(git ls-files '*.patch')
+          fail=0
+          for p in "${patches[@]}"; do
+            # Files the patch targets do not exist in this repo, so a
+            # "No such file or directory" is expected; a parse error is not.
+            out=$(git apply --check "$p" 2>&1 || true)
+            if grep -q 'corrupt patch' <<<"$out"; then
+              echo "FAIL $p"
+              echo "$out"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "ok: every patch parses as a unified diff"
           exit $fail
 
       - name: No CRLF line endings

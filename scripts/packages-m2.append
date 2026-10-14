@@ -1,0 +1,78 @@
+# Package selection for a vGP-42X6V1 image that stops at M2.
+#
+# This is the variant published as a release asset, and the default for a build
+# that is meant to leave this machine.  It carries what is proven on real
+# hardware -- the four GbE ports, Wi-Fi 6, LuCI and apk -- and deliberately
+# leaves out the optical frontend and the xPON/OMCI stack, because those need the
+# per-unit laser (BOB) calibration blob:
+#
+#   * The BOB blob lives in the factory partition of *your* unit, at flash
+#     0x6F00497 (see docs/hardware.md, section 8).  It is not in this repository,
+#     and it must never be copied from another unit: it is that laser's own
+#     bias/APC table.
+#   * Without it the EN7571 never leaves probe, and the xPON MAC -- which takes
+#     its optical frontend reference from that node -- fails with -ENODEV.
+#
+# Keeping those packages out means the image carries no driver that cannot work,
+# so a boot log stays quiet instead of showing failures nobody can act on.  Build
+# with `--variant full` (scripts/packages.append) when you are working on a unit
+# whose BOB blob you have extracted, and read docs/pon-port.md first.
+#
+# Kept from the M3 step-1 list: i2c-tools and kmod-i2c-mt7621.  The I2C0
+# controller is plain SoC infrastructure, not optical-specific, and `i2cdetect`
+# is the first thing worth running on an unknown board.  It performs no bus
+# transfers at probe, so an unpopulated bus cannot hang the boot.
+#
+# Rule: the value must be exactly "y", never "m".  CONFIG_PACKAGE_foo=m only
+# BUILDS the package; it does not install it into the rootfs, which produces an
+# image that is missing files and looks like a driver bug.
+
+# --- Wi-Fi: the AP daemon ---------------------------------------------------
+# DEVICE_PACKAGES brings the driver (kmod-mt7915e) and the firmware blobs, but
+# that is not enough: without wpad there is no /usr/sbin/hostapd, /etc/init.d/wpad
+# starts nothing, and no wlan* netdev ever appears.
+CONFIG_PACKAGE_wpad-mbedtls=y
+CONFIG_PACKAGE_hostapd-utils=y
+# iw is used by mac80211.sh when it has to set a MAC or read PHY state.
+CONFIG_PACKAGE_iw=y
+# iwinfo backs the Wi-Fi pages of the web UI.
+CONFIG_PACKAGE_iwinfo=y
+# regulatory.db, needed for `option country`.
+CONFIG_PACKAGE_wireless-regdb=y
+
+# --- management UI ----------------------------------------------------------
+# luci-ssl pulls in uhttpd + libustream-mbedtls + px5g-mbedtls; all of them are
+# named explicitly so a feed change cannot silently leave the board without a
+# web UI.
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-ssl=y
+CONFIG_PACKAGE_uhttpd=y
+CONFIG_PACKAGE_uhttpd-mod-ubus=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-package-manager=y
+
+# --- package manager --------------------------------------------------------
+# OpenWrt main ships apk (apk-tools 3.x); opkg no longer exists in the snapshot.
+# Userspace packages can be added later from OpenWrt's generic
+# aarch64_cortex-a53 feeds, but a kernel module cannot: the target is
+# FEATURES:=source-only, so no kmods/ directory is published for it, and a module
+# has to match the running kernel exactly.  Whatever this image needs in the way
+# of kmod-* therefore has to be selected here.  For the modules that are not baked
+# in, CI publishes a per-release repository on the gh-pages branch -- see
+# docs/packages.md.
+# Note: `apk upgrade` is NOT safe on this board -- several packages in the
+# snapshot are built against a different zlib ABI than the image's.  See
+# docs/roadmap.md.
+CONFIG_PACKAGE_apk-mbedtls=y
+
+# --- diagnostics ------------------------------------------------------------
+# iperf3 is the throughput test used for the LAN/Wi-Fi acceptance checks.
+CONFIG_PACKAGE_iperf3=y
+# i2c-tools: `i2cdetect -y -r 0` is the first look at the optical I2C bus at
+# 0x70.  Read mode only -- never write to the BOSA/laser.
+CONFIG_PACKAGE_i2c-tools=y
+# The controller itself is a module (the target sets CONFIG_I2C=m, and Kconfig
+# clamps a tristate child to its parent), so it needs a kmod package that is
+# selected explicitly -- see openwrt/patches/0005-*.patch, which declares
+# kmod-i2c-mt7621.  Without this line the image builds fine but has no driver.
+CONFIG_PACKAGE_kmod-i2c-mt7621=y

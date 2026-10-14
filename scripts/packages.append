@@ -4,10 +4,13 @@
 # .config, runs `make defconfig`, and then verifies that every one of them
 # survived -- defconfig silently drops a symbol whose dependencies are missing.
 #
-# Why this file exists at all: target airoha/en7523 is FEATURES:=source-only,
-# so there is no official package repository to install from on the running
-# board.  Anything an image needs has to be selected here, or baked in through
-# DEVICE_PACKAGES in the device definition.
+# Why this file exists at all: target airoha/en7523 is FEATURES:=source-only, so
+# no kmods/ directory is published for it and a kernel module can never be
+# installed later from an official feed -- it has to match the exact kernel build.
+# Anything an image needs in the way of kmod-* is selected here, or baked in
+# through DEVICE_PACKAGES in the device definition.  Userspace packages are not
+# affected: they install later from the generic aarch64_cortex-a53 feeds, and
+# docs/packages.md also describes the per-release kmod repository CI publishes.
 #
 # Rule: the value must be exactly "y", never "m".  CONFIG_PACKAGE_foo=m only
 # BUILDS the package; it does not install it into the rootfs, which produces an

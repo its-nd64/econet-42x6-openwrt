@@ -1,29 +1,108 @@
 name: build
 
-# Builds the firmware and the project's Image Builder.
+# One firmware build, from a clean OpenWrt tree, with a verification gate.
 #
 # This is a full OpenWrt source build: expect roughly 2-3 hours on a GitHub
-# runner. It is deliberately manual (or on a tag) rather than on every push,
-# because it is expensive and the useful output is a release artifact.
+# runner.  It is written as a reusable workflow so release.yml can call it twice
+# (once per image kind) instead of duplicating the whole sequence.
+#
+# Why one image kind per run: the persistent image must NOT carry a kernel with
+# the initramfs embedded in it.  Toggling CONFIG_TARGET_ROOTFS_INITRAMFS changes
+# the kernel, so the two images cannot come out of one build -- measured, the
+# sysupgrade image of a build that had the initramfs in the kernel was
+# 12,058,913 B with the squashfs at 0x760000, against 9,437,473 B with the
+# squashfs at 0x3A0000 without it.  A sysupgrade image whose squashfs sits past
+# mtd4 (0x3A0000) cannot be split correctly.  Two jobs on two runners also keeps
+# the wall-clock time at one build instead of two back-to-back.
+#
+# Called by: release.yml
+# Manual use: Actions -> build -> Run workflow (dev builds, nothing is published)
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      variant:
+        description: 'package variant: m2 (Ethernet + Wi-Fi + LuCI + apk) or full (adds optical/xPON/OMCI)'
+        required: false
+        type: string
+        default: m2
+      images:
+        description: 'which image kind this run produces'
+        required: false
+        type: string
+        default: initramfs
+      imagebuilder:
+        description: 'also build the self-contained Image Builder tarball'
+        required: false
+        type: boolean
+        default: false
       upload:
-        description: 'Upload images and Image Builder as workflow artifacts'
+        description: 'upload images as a workflow artifact'
+        required: false
         type: boolean
         default: true
-  push:
-    tags:
-      - 'v*'
+      tag:
+        description: 'release tag the package repository is keyed to (empty = dev-<sha>)'
+        required: false
+        type: string
+        default: ''
+      feeds:
+        description: 'also publish the userspace apk feeds, not just the kernel modules'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      commit:
+        description: 'the OpenWrt revision that was built'
+        value: ${{ jobs.firmware.outputs.commit }}
+      variant:
+        description: 'the package variant that was built'
+        value: ${{ jobs.firmware.outputs.variant }}
+      images:
+        description: 'the image kind that was built'
+        value: ${{ jobs.firmware.outputs.images }}
+
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'package variant'
+        type: choice
+        options: [m2, full]
+        default: m2
+      images:
+        description: 'which image kind to produce'
+        type: choice
+        options: [initramfs, sysupgrade]
+        default: initramfs
+      imagebuilder:
+        description: 'also build the Image Builder tarball'
+        type: boolean
+        default: false
+      upload:
+        description: 'upload images as a workflow artifact'
+        type: boolean
+        default: true
+      tag:
+        description: 'release tag the package repository is keyed to (empty = dev-<sha>)'
+        type: string
+        default: ''
+      feeds:
+        description: 'also publish the userspace apk feeds'
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   firmware:
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    outputs:
+      commit: ${{ steps.pin.outputs.commit }}
+      variant: ${{ inputs.variant }}
+      images: ${{ inputs.images }}
+      tag: ${{ steps.meta.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +114,22 @@ jobs:
           . scripts/pin.env
           echo "commit=$OPENWRT_COMMIT" >> "$GITHUB_OUTPUT"
           echo "Pinned revision: $OPENWRT_COMMIT ($OPENWRT_COMMIT_DATE)"
+
+      - name: Work out the tag and artifact names
+        id: meta
+        env:
+          # Inputs can be absent (a tag push calls this workflow with defaults
+          # only), so they are passed through the environment rather than
+          # interpolated, and defaulted here.
+          IN_TAG: ${{ inputs.tag }}
+          IN_VARIANT: ${{ inputs.variant }}
+          IN_IMAGES: ${{ inputs.images }}
+        run: |
+          set -e
+          tag="${IN_TAG:-dev-${GITHUB_SHA::7}}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "artifact=airoha-en7523-${IN_IMAGES}-${IN_VARIANT}" >> "$GITHUB_OUTPUT"
+          echo "variant=$IN_VARIANT images=$IN_IMAGES tag=$tag"
 
       # An OpenWrt build needs roughly 30 GB. A stock GitHub runner has about
       # 14 GB free, so this is not optional.
@@ -70,45 +165,130 @@ jobs:
           restore-keys: |
             owrt-dl-${{ steps.pin.outputs.commit }}-
 
-      - name: Build firmware and Image Builder
-        run: ./scripts/build-imagebuilder.sh openwrt -j"$(nproc)"
+      - name: Build
+        env:
+          IN_IMAGES: ${{ inputs.images }}
+          IN_VARIANT: ${{ inputs.variant }}
+          IN_IB: ${{ inputs.imagebuilder }}
+        run: |
+          set -e
+          args=(openwrt --variant "$IN_VARIANT" -j"$(nproc)")
+          if [ "$IN_IMAGES" = "initramfs" ]; then
+            args+=(--initramfs)
+          else
+            args+=(--no-initramfs)
+          fi
+          if [ "$IN_IB" = "true" ]; then
+            args+=(--imagebuilder)
+          fi
+          echo "+ ./scripts/build-firmware.sh ${args[*]}"
+          ./scripts/build-firmware.sh "${args[@]}"
 
-      - name: Verify every built image
+      # Two different questions, two tools:
+      #   verify_build.py  -- does the FIT load the kernel where the kernel thinks
+      #                       it is linked?  Getting this wrong deadloops in
+      #                       head.S with a silent UART.
+      #   verify_image.py  -- does the rootfs start inside the kernel partition?
+      #                       This is the one that stops a bad sysupgrade image.
+      - name: Verify the images
+        env:
+          IN_IMAGES: ${{ inputs.images }}
         run: |
           set -e
           shopt -s nullglob
-          for img in openwrt/bin/targets/airoha/en7523/*-initramfs-kernel.bin; do
-            python3 tools/verify_build.py "$img"
-          done
+          if [ "$IN_IMAGES" = "sysupgrade" ]; then
+            imgs=(openwrt/bin/targets/airoha/en7523/*-sysupgrade.bin)
+            [ ${#imgs[@]} -gt 0 ] || { echo "!! the build produced no sysupgrade image"; exit 1; }
+            for img in "${imgs[@]}"; do
+              python3 tools/verify_build.py "$img"
+            done
+            # Hard gate: this is the image somebody is about to flash.
+            python3 tools/verify_image.py "${imgs[@]}"
+          else
+            imgs=(openwrt/bin/targets/airoha/en7523/*-initramfs-kernel.bin)
+            [ ${#imgs[@]} -gt 0 ] || { echo "!! the build produced no initramfs image"; exit 1; }
+            for img in "${imgs[@]}"; do
+              python3 tools/verify_build.py "$img"
+            done
+            python3 tools/verify_image.py "${imgs[@]}"
+          fi
 
-      - name: Collect artifacts
+      - name: Collect the artifacts
+        env:
+          IN_IMAGES: ${{ inputs.images }}
+          IN_IB: ${{ inputs.imagebuilder }}
         run: |
           set -e
+          shopt -s nullglob
           mkdir -p out
-          cp -v openwrt/bin/targets/airoha/en7523/*.bin out/ 2>/dev/null || true
-          cp -v dist/*.tar.zst out/ 2>/dev/null || true
-          # OpenWrt writes a manifest alongside the images; keep it for traceability
+          if [ "$IN_IMAGES" = "sysupgrade" ]; then
+            # Only the persistent image.  The initramfs image of a build that did
+            # not ask for one is not something to hand out by accident.
+            cp -v openwrt/bin/targets/airoha/en7523/*-sysupgrade.bin out/
+          else
+            cp -v openwrt/bin/targets/airoha/en7523/*-initramfs-kernel.bin out/
+          fi
           cp -v openwrt/bin/targets/airoha/en7523/*.manifest out/ 2>/dev/null || true
+          if [ "$IN_IB" = "true" ]; then
+            # dist/ is where build-imagebuilder.sh copies the tarball.
+            tarballs=(dist/*.tar.zst)
+            [ ${#tarballs[@]} -gt 0 ] || { echo "!! CONFIG_IB was requested but dist/ has no tarball"; exit 1; }
+            cp -v "${tarballs[@]}" out/
+          fi
           cd out
           sha256sum * > SHA256SUMS
           ls -lh
           cat SHA256SUMS
 
-      - name: Upload workflow artifacts
-        if: github.event_name == 'workflow_dispatch' && inputs.upload
+      # The package repository is published per release, keyed to the tag: a
+      # kernel module only loads into the kernel it was built against.
+      - name: Build the package repository
+        if: inputs.images == 'sysupgrade'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          IN_FEEDS: ${{ inputs.feeds }}
+        run: |
+          set -e
+          args=(openwrt --tag "$TAG" --out pages)
+          if [ "$IN_FEEDS" = "true" ]; then
+            args+=(--with-feeds)
+          fi
+          ./scripts/publish-packages.sh "${args[@]}"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ steps.meta.outputs.artifact }}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| OpenWrt revision | \`${{ steps.pin.outputs.commit }}\` |"
+            echo "| package variant | \`${{ inputs.variant }}\` |"
+            echo "| image kind | \`${{ inputs.images }}\` |"
+            echo "| tag | \`${{ steps.meta.outputs.tag }}\` |"
+            echo
+            if [ -f out/SHA256SUMS ]; then
+              echo '```'
+              cat out/SHA256SUMS
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the images
+        if: inputs.upload
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-airoha-en7523
+          name: ${{ steps.meta.outputs.artifact }}
           path: out/*
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          gh release create "${GITHUB_REF_NAME}" out/* \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+      - name: Upload the package repository
+        if: inputs.images == 'sysupgrade'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh-pages-${{ steps.meta.outputs.tag }}
+          path: pages/**
+          if-no-files-found: error
+          retention-days: 30

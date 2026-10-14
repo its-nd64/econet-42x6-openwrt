@@ -18,7 +18,7 @@ Quick reference:
 | File | Purpose |
 |---|---|
 | `build-image.sh` | Extracts the Image Builder, runs `make image`, and collects the results with checksums. |
-| `packages.txt` | Curated package list used by `--all-packages`: the Wi-Fi AP daemon, the web UI, the package manager and diagnostics. Comment out what you do not want. The board needs them baked in, because target airoha/en7523 is source-only and has no package feed. |
+| `packages.txt` | Curated package list used by `--all-packages`: the Wi-Fi AP daemon, the web UI, the package manager and diagnostics. Comment out what you do not want. They need to be baked in, because target airoha/en7523 is source-only: no `kmods/` directory is published for it, so every kernel module the image wants has to be inside it. |
 | `files/` | Overlay copied into the image root. Currently a single first-boot script setting the hostname -- deliberately minimal, because the board generates its own network and wireless configuration, and the wireless interfaces stay disabled until an operator enables them. |
 
 Two things that commonly go into `files/`:

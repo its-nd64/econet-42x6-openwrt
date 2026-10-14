@@ -176,11 +176,14 @@ each cost a boot to learn. Full story: [pon-port.md](pon-port.md) sections
   and `/sys/class/watchdog` is empty, because the Airoha watchdog driver only
   starts when userspace opens it `[hardware]`. The thermal block is disabled in the
   target config `[not verified]`.
-* **Package upgrades.** The target has no official package repository
-  (`FEATURES:=source-only`), so every `kmod-*` must be baked into the image. New
-  userspace packages install fine from the generic feeds, but `apk upgrade` must not
-  be run: 12 installed packages are behind, one a `zlib` major-version change that
-  can take the whole userland (and SSH) down.
+* **Package upgrades.** The target has no official package repository for its
+  *kernel modules* (`FEATURES:=source-only` means no `kmods/` directory is
+  published for `airoha/en7523`), so every `kmod-*` the image needs is baked into
+  it. New userspace packages install fine from the generic feeds, but `apk upgrade`
+  must not be run: 12 installed packages are behind, one a `zlib` major-version
+  change that can take the whole userland (and SSH) down. Modules that are not
+  baked in can be added from the repository CI publishes per release: see
+  [packages.md](packages.md).
 * **Image size limits.** `IMAGE_SIZE` is not set, so an oversized image is
   truncated at flash time rather than rejected at build time. `[not verified]`
 

@@ -191,8 +191,19 @@ before enabling it by default.
 
 ## 6. Packaging: bake every kmod, and respect the ABI
 
-**Why it matters.** The `airoha/en7523` target is `source-only`, so it has no official
-package repository: anything not in the image has to be built into the next one.
+**Why it matters.** The `airoha/en7523` target is `source-only`, so no `kmods/`
+directory is published for it: a kernel module that is not already in the image has
+to come from a repository built against the same kernel, or be built into the next
+image.
+
+**Where the work stands.** The rule and the `apk` hazard are written down
+([building.md](building.md) section 4, [packages.md](packages.md)). The kernel
+modules are now published per release as well: `scripts/publish-packages.sh`
+assembles a repository out of a finished build tree, `release.yml` runs it only
+after the sysupgrade image has passed `tools/verify_image.py`, and its `pages` job
+pushes the result to the `gh-pages` branch keyed to the release tag. What has *not*
+happened is a board installing from it: no release has been published yet, so the
+first one is the test.
 
 **Steps**
 
@@ -202,7 +213,10 @@ package repository: anything not in the image has to be built into the next one.
    packages, but `apk upgrade` must not be run on a snapshot image: 12 installed
    packages are behind, and one is a `zlib` major-version bump, which can break every
    binary linked against the older `zlib` -- including the SSH server needed to fix it.
-3. Add a build-time note or check so a release image never depends on a package the
+3. Exercise the published repository on a board: install one module from it, confirm
+   it loads, and record what happens when the tag in the URL does not match the
+   running kernel (the expected failure is `invalid module format`).
+4. Add a build-time note or check so a release image never depends on a package the
    target cannot fetch.
 
 **Acceptance test:** a fresh install reaches the LuCI package manager, installs a new

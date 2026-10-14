@@ -1,0 +1,323 @@
+name: release
+
+# Builds both images on GitHub, verifies them, publishes a GitHub Release, and
+# updates the package repository on the gh-pages branch.
+#
+# Triggered by a `v*` tag, or manually with Actions -> release -> Run workflow
+# (which creates the tag if it does not exist yet).
+#
+# The two images are built by two parallel jobs in build.yml, because a kernel
+# with the initramfs embedded cannot be used for the persistent image: see the
+# comment at the top of build.yml.  Each one is verified before anything is
+# published, and the sysupgrade image additionally has to pass
+# tools/verify_image.py, which is the gate that keeps an image capable of being
+# flashed with a wrong split out of a release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'tag to publish, e.g. v0.2.0 (created if it does not exist)'
+        required: true
+        type: string
+      variant:
+        description: 'package variant'
+        type: choice
+        options: [m2, full]
+        default: m2
+      feeds:
+        description: 'also publish the userspace feeds to gh-pages (adds hundreds of MB)'
+        type: boolean
+        default: false
+      publish_release:
+        description: 'create/update the GitHub Release'
+        type: boolean
+        default: true
+      publish_pages:
+        description: 'push the package repository to the gh-pages branch'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+# One release at a time: two runs pushing to gh-pages would race.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.r.outputs.tag }}
+      variant: ${{ steps.r.outputs.variant }}
+      feeds: ${{ steps.r.outputs.feeds }}
+      publish_release: ${{ steps.r.outputs.publish_release }}
+      publish_pages: ${{ steps.r.outputs.publish_pages }}
+    steps:
+      - name: Work out what to publish
+        id: r
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_VARIANT: ${{ inputs.variant }}
+          IN_FEEDS: ${{ inputs.feeds }}
+          IN_RELEASE: ${{ inputs.publish_release }}
+          IN_PAGES: ${{ inputs.publish_pages }}
+        run: |
+          set -e
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            tag="$IN_TAG"
+            variant="${IN_VARIANT:-m2}"
+            feeds="${IN_FEEDS:-false}"
+            release="${IN_RELEASE:-true}"
+            pages="${IN_PAGES:-true}"
+          else
+            # A tag push carries no inputs; the defaults are the release shape.
+            tag="$REF_NAME"
+            variant="m2"
+            feeds="false"
+            release="true"
+            pages="true"
+          fi
+          [ -n "$tag" ] || { echo "!! no tag given, and this is not a tag push"; exit 1; }
+          case "$tag" in
+            v*) ;;
+            *) echo "!! '$tag' does not look like a release tag; use v<something>"; exit 1 ;;
+          esac
+          case "$variant" in
+            m2|full) ;;
+            *) echo "!! unknown variant '$variant'"; exit 1 ;;
+          esac
+          {
+            echo "tag=$tag"
+            echo "variant=$variant"
+            echo "feeds=$feeds"
+            echo "publish_release=$release"
+            echo "publish_pages=$pages"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag variant=$variant feeds=$feeds release=$release pages=$pages"
+
+  # Both jobs are the same build.yml; they differ only in which image kind they
+  # produce.  They run in parallel on separate runners, so the wall-clock cost is
+  # one build rather than two.
+  initramfs:
+    needs: resolve
+    uses: ./.github/workflows/build.yml
+    with:
+      variant: ${{ needs.resolve.outputs.variant }}
+      images: initramfs
+      imagebuilder: true
+      upload: true
+      tag: ${{ needs.resolve.outputs.tag }}
+
+  sysupgrade:
+    needs: resolve
+    uses: ./.github/workflows/build.yml
+    with:
+      variant: ${{ needs.resolve.outputs.variant }}
+      images: sysupgrade
+      imagebuilder: false
+      upload: true
+      tag: ${{ needs.resolve.outputs.tag }}
+      feeds: ${{ needs.resolve.outputs.feeds == 'true' }}
+
+  release:
+    needs: [resolve, initramfs, sysupgrade]
+    if: needs.resolve.outputs.publish_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Needed for scripts/pin.env, which the release notes quote.
+      - uses: actions/checkout@v4
+
+      - name: Download the built images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: airoha-en7523-*
+          path: incoming
+
+      - name: Assemble the release
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VARIANT: ${{ needs.resolve.outputs.variant }}
+          FEEDS: ${{ needs.resolve.outputs.feeds }}
+        run: |
+          set -e
+          shopt -s nullglob
+
+          . scripts/pin.env
+          PIN="$OPENWRT_COMMIT"
+          DESCRIBE="$OPENWRT_DESCRIBE"
+
+          mkdir -p rel
+          cp -v incoming/*/*.bin rel/
+          tarballs=(incoming/*/*.tar.zst)
+          if [ ${#tarballs[@]} -gt 0 ]; then
+            cp -v "${tarballs[@]}" rel/
+          fi
+
+          cd rel
+          files=(*.bin *.tar.zst)
+          [ ${#files[@]} -gt 0 ] || { echo "!! nothing was downloaded"; exit 1; }
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+          owner="${GITHUB_REPOSITORY%%/*}"
+          name="${GITHUB_REPOSITORY##*/}"
+          pages="https://${owner}.github.io/${name}"
+          raw="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/gh-pages"
+
+          {
+            echo "# Econet vG vGP-42X6V1 (Airoha EN7523) -- ${TAG}"
+            echo
+            echo "OpenWrt images for the Econet vG vGP-42X6V1 GPON ONU, built from"
+            echo "OpenWrt at \`${PIN}\` (${DESCRIBE})."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| tag | \`${TAG}\` |"
+            echo "| package variant | \`${VARIANT}\` |"
+            echo "| built by | [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) |"
+            echo "| kmod repository | [${TAG}](${pages}/${TAG}/install.md) |"
+            echo
+            echo "## What is in the images"
+            echo
+            if [ "$VARIANT" = "m2" ]; then
+              echo "The **M2** variant: 4x GbE, Wi-Fi 6 (MT7916), LuCI over HTTPS and apk."
+              echo
+              echo "The optical frontend and the xPON/OMCI stack are deliberately **not**"
+              echo "included.  They need the per-unit BOB laser calibration blob, which is"
+              echo "read from the factory partition of the individual unit and is not"
+              echo "published -- see \`docs/hardware.md\` section 8.  Shipping the drivers"
+              echo "without that blob would only produce a boot log full of failures nobody"
+              echo "can act on."
+            else
+              echo "The **full** variant: the M2 set plus the optical frontend and the"
+              echo "xPON/OMCI stack."
+              echo
+              echo "**This image is not useful on your unit without its own BOB blob.**"
+              echo "The xPON MAC fails with -ENODEV until the per-unit laser calibration"
+              echo "blob is present in the factory partition -- see \`docs/pon-port.md\`."
+              echo "The optical path is a work in progress and does not yet carry traffic."
+            fi
+            echo
+            echo "## Flashing"
+            echo
+            echo "* \`*-initramfs-kernel.bin\` -- RAM boot over UART/YMODEM.  Nothing is"
+            echo "  written to flash, which makes it the safe first step.  See \`docs/booting.md\`."
+            echo "* \`*-squashfs-sysupgrade.bin\` -- the persistent image, for the spare slot."
+            echo "  It has been checked with \`tools/verify_image.py\`: the rootfs starts"
+            echo "  inside the kernel partition, so sysupgrade can split it."
+            echo "* \`openwrt-imagebuilder-*.tar.zst\` -- the Image Builder, for building your"
+            echo "  own image without a full source build.  See \`docs/image-builder.md\`."
+            echo
+            echo "## Installing kernel modules"
+            echo
+            echo "Kernel modules are the one thing that cannot be installed from OpenWrt"
+            echo "itself here: \`airoha/en7523\` is \`source-only\`, so no \`kmods/\` directory is"
+            echo "published for this board, and a module has to match the running kernel"
+            echo "exactly.  (Userspace packages are unaffected and come from the generic"
+            echo "\`aarch64_cortex-a53\` feeds.)  This release publishes a repository of its own:"
+            echo
+            echo '```sh'
+            echo "echo '${pages}/${TAG}/kmods/<kernel>' > /etc/apk/repositories.d/42x6-kmods.list"
+            echo "apk update --allow-untrusted"
+            echo "apk add --allow-untrusted <package>"
+            echo '```'
+            echo
+            echo "The packages are not signed, hence \`--allow-untrusted\`.  Match the tag in"
+            echo "the URL to the image you are running: a kernel module only loads into the"
+            echo "kernel it was built against.  The exact directory name for this release is"
+            echo "in [install.md](${pages}/${TAG}/install.md); the same tree is mirrored at"
+            echo "\`${raw}/${TAG}/\`."
+            if [ "$FEEDS" = "true" ]; then
+              echo
+              echo "The userspace feeds for this release are published too, under"
+              echo "\`${pages}/${TAG}/packages/\`."
+            fi
+            echo
+            echo "## Checksums"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo
+            echo "Both images were verified before this release was created: the FIT load"
+            echo "and entry addresses match where the kernel is linked (\`tools/verify_build.py\`),"
+            echo "and the rootfs of the persistent image starts inside mtd4"
+            echo "(\`tools/verify_image.py\`)."
+          } > ../NOTES.md
+
+          echo
+          echo "==> release notes"
+          cat ../NOTES.md
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -e
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "==> $TAG already exists; replacing its assets"
+            gh release upload "$TAG" rel/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --notes-file NOTES.md
+          else
+            echo "==> creating $TAG"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --notes-file NOTES.md rel/*
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY"
+
+  # The package repository goes on the gh-pages branch, one directory per release
+  # tag, with earlier releases kept: somebody running an older image still needs
+  # the modules built for its kernel.
+  pages:
+    needs: [resolve, sysupgrade]
+    if: needs.resolve.outputs.publish_pages == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the package repository
+        uses: actions/download-artifact@v4
+        with:
+          name: gh-pages-${{ needs.resolve.outputs.tag }}
+          path: incoming
+
+      - name: Push it to the gh-pages branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -e
+          ls -R incoming | head -30
+          mkdir -p work
+          cd work
+          git init -q
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth=1 origin gh-pages 2>/dev/null; then
+            git checkout -q -B gh-pages FETCH_HEAD
+            echo "==> kept the existing gh-pages tree"
+          else
+            git checkout -q --orphan gh-pages
+            echo "==> gh-pages does not exist yet, starting it"
+          fi
+          cp -a ../incoming/. .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "==> gh-pages is already up to date for $TAG"
+          else
+            git commit -q -m "packages: $TAG"
+            git push -q origin gh-pages
+            echo "==> pushed gh-pages for $TAG"
+          fi

@@ -8,7 +8,16 @@
 #   --initramfs        also emit *-initramfs-kernel.bin        (default)
 #   --no-initramfs     do not
 #   --debug-kmods      install kmod-pciedbg + kmod-ringwatch into the image
-#   --no-packages      do not seed scripts/packages.append into .config
+#   --variant m2|full  which package set to seed               (default: full)
+#                        m2   Ethernet + Wi-Fi + LuCI + apk only.  This is what a
+#                             release meant for someone else's unit should be: it
+#                             carries no driver that needs the per-unit laser
+#                             (BOB) calibration blob.
+#                        full m2 + optical frontend + xPON + OMCI.  Only useful
+#                             on a unit whose BOB blob you have extracted from its
+#                             own factory partition -- see docs/pon-port.md.
+#   --packages FILE    seed FILE instead of the variant's own list
+#   --no-packages      do not seed any package list into .config
 #   --with-pon         apply the stage 2 xPON patches (NOT functional yet)
 #   --mt76-debug       also apply the diagnostic mt76 patch (never ship this)
 #   --imagebuilder     additionally produce the self-contained Image Builder
@@ -33,6 +42,8 @@ WITH_PACKAGES=1
 MT76_DEBUG=0
 IMAGEBUILDER=0
 DO_APPLY=1
+VARIANT=full
+PKGS_FILE=""
 JOBS=$(nproc 2>/dev/null || echo 4)
 OWRT_ARG=""
 
@@ -42,12 +53,14 @@ while [ $# -gt 0 ]; do
 		--no-initramfs) INITRAMFS=0 ;;
 		--debug-kmods)  DEBUG_KMODS=1 ;;
 		--no-packages)  WITH_PACKAGES=0 ;;
+		--variant)      VARIANT="${2:?--variant needs m2 or full}"; shift ;;
+		--packages)     PKGS_FILE="${2:?--packages needs a file}"; shift ;;
 		--with-pon)     WITH_PON=1 ;;
 		--mt76-debug)   MT76_DEBUG=1 ;;
 		--imagebuilder) IMAGEBUILDER=1 ;;
 		--no-apply)     DO_APPLY=0 ;;
 		-j|--jobs)      JOBS="${2:?--jobs needs a number}"; shift ;;
-		-h|--help)      sed -n '2,24p' "$0"; exit 0 ;;
+		-h|--help)      awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
 		-*)             echo "!! unknown option: $1" >&2; exit 2 ;;
 		*)              OWRT_ARG="$1" ;;
 	esac
@@ -59,6 +72,11 @@ if [ -z "$OWRT_ARG" ]; then
 	exit 2
 fi
 OWRT=$(cd "$OWRT_ARG" && pwd)
+
+case "$VARIANT" in
+	m2|full) ;;
+	*) echo "!! --variant must be m2 or full, not '$VARIANT'" >&2; exit 2 ;;
+esac
 
 # ---------------------------------------------------------------------------
 # (1) Board support into the tree
@@ -154,15 +172,22 @@ set_cfg "CONFIG_KERNEL_DEVTMPFS_MOUNT" "y"
 # (2c) Packages
 #
 # The target is source-only, so anything the image needs must be selected at
-# build time.  See scripts/packages.append.
+# build time.  Two lists: scripts/packages.append (variant full) carries the
+# optical + xPON + OMCI stack, scripts/packages-m2.append (variant m2, the one
+# published as a release asset) stops at Ethernet + Wi-Fi + LuCI + apk.
 # ---------------------------------------------------------------------------
 if [ "$WITH_PACKAGES" = "1" ]; then
-	PKGS_FILE="$HERE/packages.append"
+	if [ -z "$PKGS_FILE" ]; then
+		case "$VARIANT" in
+			m2)   PKGS_FILE="$HERE/packages-m2.append" ;;
+			full) PKGS_FILE="$HERE/packages.append" ;;
+		esac
+	fi
 	if [ ! -f "$PKGS_FILE" ]; then
 		echo "!! $PKGS_FILE is missing" >&2
 		exit 1
 	fi
-	echo "==> Seeding packages from packages.append"
+	echo "==> Seeding packages from $(basename "$PKGS_FILE") (variant $VARIANT)"
 	while IFS= read -r line; do
 		case "$line" in
 			CONFIG_*=*) ;;
@@ -246,74 +271,20 @@ fi
 # kernel boots its own embedded rootfs rather than the flash rootfs, so nothing
 # persists across a reboot [not verified on this board, docs/sysupgrade.md].
 # ---------------------------------------------------------------------------
+# The gate itself lives in tools/verify_image.py, so the same code runs here
+# and in CI.  --warn-only is deliberate: building with --initramfs (on by
+# default) legitimately produces an image whose squashfs sits past the kernel
+# partition, and that is a development artifact, not a build failure.  CI runs
+# the same tool without --warn-only, so such an image is never published.
 if command -v python3 >/dev/null 2>&1; then
 	echo
 	echo "==> Checking the sysupgrade image(s)"
-	for img in "$BIN"/*-sysupgrade.bin; do
-		[ -e "$img" ] || continue
-		python3 - "$img" <<'PY'
-import os, struct, sys
-
-SQUASHFS_MAGIC = b"hsqs"
-COMPRESSIONS = {1, 2, 3, 4, 5, 6}   # gzip, lzma, lzo, xz, lz4, zstd
-
-
-def plausible_superblock(data, off):
-	"""True when a squashfs v4 superblock starts at `off`.
-
-	Checking the magic alone is not enough: the kernel Image is uncompressed,
-	so a stray 'hsqs' in it would be reported as the rootfs offset and hide an
-	inflated kernel.
-	"""
-	size = len(data)
-	if off < 0 or off + 96 > size or data[off:off + 4] != SQUASHFS_MAGIC:
-		return False
-	block_size, = struct.unpack_from("<I", data, off + 12)
-	compression, = struct.unpack_from("<H", data, off + 20)
-	block_log, = struct.unpack_from("<H", data, off + 22)
-	major, = struct.unpack_from("<H", data, off + 28)
-	bytes_used, = struct.unpack_from("<Q", data, off + 40)
-	if major != 4 or compression not in COMPRESSIONS:
-		return False
-	if block_size < 4096 or block_size > (1 << 20) or block_size & (block_size - 1):
-		return False
-	if block_log != block_size.bit_length() - 1:
-		return False
-	return bytes_used <= size - off
-
-
-def find_rootfs(data):
-	offs = []
-	i = data.find(SQUASHFS_MAGIC)
-	while i >= 0:
-		if plausible_superblock(data, i):
-			offs.append(i)
-		i = data.find(SQUASHFS_MAGIC, i + 1)
-	return offs
-
-
-path = sys.argv[1]
-data = open(path, "rb").read()
-size = len(data)
-offs = find_rootfs(data)
-
-print(f"    {os.path.basename(path)}: {size} bytes", end="")
-if not offs:
-	print(" -- no squashfs superblock found, is this really a sysupgrade image?")
-elif offs[0] > 0x600000:
-	print(f", squashfs at 0x{offs[0]:x}  <-- WARNING: kernel looks like it has "
-	      "the initramfs embedded")
-	print("       the FIT grew, so this image is far larger than it needs to be "
-	      "-- rebuild without")
-	print("       --initramfs for a lean persistent image (see docs/sysupgrade.md)")
-else:
-	print(f", squashfs at 0x{offs[0]:x}  ok", end="")
-	if len(offs) > 1:
-		print(f"  ({len(offs)} candidate offsets, using the first)")
-	else:
-		print()
-PY
-	done
+	IMGS=("$BIN"/*-sysupgrade.bin)
+	if [ -e "${IMGS[0]}" ]; then
+		python3 "$REPO/tools/verify_image.py" --warn-only "${IMGS[@]}"
+	else
+		echo "    (no sysupgrade image produced)"
+	fi
 fi
 
 cat <<EOF
@@ -327,9 +298,16 @@ cat <<EOF
 
 ==> Verify before flashing
 
-  python3 $REPO/tools/verify_build.py <image>
+  python3 $REPO/tools/verify_build.py <image>    # FIT load/entry vs _text
+  python3 $REPO/tools/verify_image.py <image>    # rootfs fits the kernel partition
 
-It checks that the FIT load/entry address is 0x80208000.  Get this wrong and the
-kernel deadloops in head.S before it can print anything, leaving the UART
-completely silent with no diagnostic.  See docs/booting.md.
+verify_build.py checks that the FIT load/entry address is 0x80208000.  Get this
+wrong and the kernel deadloops in head.S before it can print anything, leaving
+the UART completely silent with no diagnostic.  See docs/booting.md.
+
+verify_image.py is the flash gate for a sysupgrade image: mtdsplit_fit derives
+the kernel partition from the FIT totalsize, so an image whose squashfs starts
+past mtd4 (0x3A0000) cannot be split correctly by sysupgrade.  CI fails on it; a
+local build only warns, because --initramfs is on by default here.  See
+docs/sysupgrade.md.
 EOF

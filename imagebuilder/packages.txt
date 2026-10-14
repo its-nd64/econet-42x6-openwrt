@@ -3,9 +3,11 @@
 # Use with:  ./imagebuilder/build-image.sh <ib.tar.zst> --all-packages
 # or copy a line into -P "..."
 #
-# Keep this list purposeful: target airoha/en7523 is source-only, so nothing
-# here can be installed later from a package feed -- whatever is missing has to
-# be added and the image rebuilt.
+# Keep this list purposeful: target airoha/en7523 is source-only, so no kernel
+# module here can be installed later from an official feed -- a kmod has to match
+# the exact kernel build.  Userspace packages do install later from the generic
+# feeds, and docs/packages.md describes the per-release kmod repository, but an
+# image should not depend on reaching a network to become useful.
 #
 # Comment out what you do not want.
 

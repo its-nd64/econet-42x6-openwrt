@@ -158,13 +158,20 @@ Two of these are worth understanding rather than copying:
 
 ---
 
-## 4. Packages: there is nothing to install from
+## 4. Packages: kernel modules have to be baked in
 
-`airoha/en7523` is `FEATURES:=source-only`, so there are no official package
-repositories for it. Everything the image needs -- including `kmod-mt7915e` and
-its firmware blobs -- has to be baked in at build time, and the Image Builder has
-to be produced with `CONFIG_IB_STANDALONE=y` (the build script does this) so that
-the packages it can resolve are the ones inside the tarball.
+`airoha/en7523` is `FEATURES:=source-only`, so OpenWrt publishes no `kmods/`
+directory for it. Everything the image needs in the way of kernel modules --
+including `kmod-mt7915e` and its firmware blobs -- has to be selected at build
+time. That is also why the Image Builder has to be produced with
+`CONFIG_IB_STANDALONE=y` (the build script does this): the packages it can resolve
+are the ones inside the tarball, `kmod-*` included.
+
+Userspace packages are a different case. They depend on the CPU/ABI rather than
+on the kernel, so the generic `aarch64_cortex-a53` feeds serve this board
+normally, and a kernel module can also be added after the fact from the
+per-release repository described in [`packages.md`](packages.md) -- as long as it
+was built for the kernel the board is running.
 
 Two consequences:
 
@@ -208,8 +215,11 @@ Useful flags:
 |---|---|
 | `--initramfs` | also emit `*-initramfs-kernel.bin` (the RAM-boot image); this is the default |
 | `--no-initramfs` | skip it -- use this when you only want the persistent image, see the warning below |
+| `--variant m2` | seed `scripts/packages-m2.append`: Ethernet, Wi-Fi, LuCI and apk, with no optical/xPON/OMCI. This is the shape of a release image. |
+| `--variant full` | seed `scripts/packages.append`: the same plus the optical frontend and the xPON/OMCI stack, which need the per-unit BOB blob. This is the default. |
+| `--packages FILE` | seed `FILE` instead of either list |
 | `--debug-kmods` | install `kmod-pciedbg` and `kmod-ringwatch` into the image |
-| `--no-packages` | do not seed `scripts/packages.append` into `.config` |
+| `--no-packages` | seed no package list at all into `.config` |
 | `--with-pon` | also apply the stage 2 PON patches (not functional yet) |
 | `--mt76-debug` | also apply the diagnostic mt76 ring patch (never ship it) |
 | `--imagebuilder` | also produce the Image Builder tarball |
@@ -231,11 +241,14 @@ the squashfs at `0x3A0000` for a clean build (a second instance of the same bug 
 The build succeeds either way, which is what makes the mistake silent: an inflated
 kernel means a larger derived kernel partition, so the split still mounts -- the
 damage is a needlessly huge image whose kernel boots its own embedded rootfs rather
-than the flash rootfs, so nothing would persist `[not verified]`. `build-firmware.sh`
-therefore validates the squashfs superblock of every sysupgrade image and warns when
-the offset shows an inflated kernel. Build with `--no-initramfs` when you only want
-the persistent image, and check with [sysupgrade.md](sysupgrade.md), "verify a build
-before flashing it".
+than the flash rootfs, so nothing would persist `[not verified]`.
+[`tools/verify_image.py`](../tools/verify_image.py) therefore validates the
+squashfs superblock of every sysupgrade image and reports when the offset shows an
+inflated kernel: `build-firmware.sh` calls it in a warn-only mode (because
+`--initramfs` is the default), and CI calls it as a hard gate before publishing a
+release, so an image that cannot be split is never handed out. Build with
+`--no-initramfs` when you only want the persistent image, and check with
+[sysupgrade.md](sysupgrade.md), "verify a build before flashing it".
 
 The whole image also has to stay inside slot B, **`0x2800000` (41,943,040 bytes)**,
 and nothing enforces that at build time: the device profile sets no `IMAGE_SIZE`, so

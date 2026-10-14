@@ -7,7 +7,7 @@ This is a work-in-progress port, not a finished product. **Ethernet, Wi-Fi, a
 persistent install, the optical frontend and the xPON driver probe work on real
 hardware; the GPON link itself does not (O1->O2, downstream open).** Read
 [Status](#status) before you assume anything, and read
-[Five things that will bite you](#five-things-that-will-bite-you) before you
+[Six things that will bite you](#six-things-that-will-bite-you) before you
 build.
 
 ---
@@ -49,6 +49,9 @@ build.
   image into flash, paste a file into tmpfs and verify a built image.
 * A way to produce a **self-contained Image Builder**, so later images can be
   composed with the normal OpenWrt workflow.
+* **Prebuilt images and a kernel-module repository**, built and verified by CI, so
+  trying the board does not start with a 2-3 hour build. See
+  [Prebuilt images](#prebuilt-images-and-the-package-repository).
 
 Everything that mutates the OpenWrt tree lives under [`openwrt/`](openwrt/).
 [`docs/`](docs/) explains the hardware, the bugs, and the build.
@@ -121,6 +124,55 @@ Prioritised remaining work with acceptance criteria:
 
 ---
 
+## Prebuilt images and the package repository
+
+CI builds both images on GitHub, verifies them, and attaches them to a
+[release](https://github.com/realldz/econet-42x6-openwrt/releases) along with the
+Image Builder tarball. Nothing has to be built locally to try the board.
+
+| Asset | Use |
+|---|---|
+| `*-initramfs-kernel.bin` | RAM boot over UART/YMODEM. Writes nothing to flash -- try this one first. |
+| `*-squashfs-sysupgrade.bin` | The persistent image; belongs in slot B (`mtd3`, `tclinux_slave`). |
+| `openwrt-imagebuilder-*.tar.zst` | Build your own image later without a full source build. |
+| `SHA256SUMS` | What each file hashes to. |
+
+The released images are the **M2** variant: the four GbE ports, Wi-Fi 6, LuCI and
+`apk`. The optical frontend and the xPON/OMCI stack are deliberately left out,
+because they need the per-unit BOB laser calibration blob, which sits in the
+factory partition of the individual unit and is not published here -- see
+[`docs/hardware.md`](docs/hardware.md). Drivers without that blob only produce a
+boot log full of failures nobody can act on. To build the full set for your own
+unit, use `--variant full` and read [`docs/pon-port.md`](docs/pon-port.md).
+
+### Installing extra packages
+
+`airoha/en7523` is `FEATURES:=source-only`, so OpenWrt publishes no `kmods/`
+directory for it, and **no kernel module for this board can be installed from
+downloads.openwrt.org**. (Userspace packages are a different matter: they depend
+on the CPU/ABI rather than the kernel, and install normally from the generic
+`aarch64_cortex-a53` feeds.) A kernel module has to come from a repository built
+against the exact kernel the board is running, because one built against another
+kernel is refused at load time with `invalid module format`. CI publishes such a
+repository per release, keyed to the release tag, on the `gh-pages` branch:
+
+```sh
+echo 'https://realldz.github.io/econet-42x6-openwrt/<tag>/kmods/<kernel>' \
+  > /etc/apk/repositories.d/42x6-kmods.list
+apk update --allow-untrusted
+apk add --allow-untrusted <package>
+```
+
+The packages are not signed, which is what `--allow-untrusted` is for. The exact
+`<tag>` and `<kernel>` for a release are written in its release notes and in
+`.../<tag>/install.md`; if GitHub Pages is not serving the branch, the same tree
+is reachable at
+`https://raw.githubusercontent.com/realldz/econet-42x6-openwrt/gh-pages/<tag>/`.
+Full detail, including how to publish a repository yourself:
+[`docs/packages.md`](docs/packages.md).
+
+---
+
 ## Build with the Image Builder (recommended)
 
 OpenWrt's **upstream** Image Builder cannot build a working image for this board:
@@ -138,8 +190,8 @@ make image PROFILE=econet_vgp-42x6v1 PACKAGES="luci luci-ssl"
 `imagebuilder/build-image.sh` wraps this with a curated package list and a
 first-boot overlay. The tarball carries the already-patched prebuilt kernel **and
 every package**, including the airoha-specific kernel modules: `airoha/en7523` is
-`FEATURES:=source-only`, so there are no official package repositories to fall
-back on. The price is a large tarball. Details:
+`FEATURES:=source-only`, so there is no official feed for its kernel modules to
+fall back on. The price is a large tarball. Details:
 [`docs/image-builder.md`](docs/image-builder.md).
 
 ---
@@ -152,7 +204,7 @@ On Linux, WSL or Docker (OpenWrt cannot be built on Windows itself):
 git clone https://github.com/openwrt/openwrt.git openwrt
 git -C openwrt checkout 9b95be917b2804cf877ca05c078175b37a3a95bf
 
-./scripts/build-firmware.sh openwrt --initramfs
+./scripts/build-firmware.sh openwrt --variant m2 --initramfs
 ```
 
 The pinned revision lives in [`scripts/pin.env`](scripts/pin.env). The script
@@ -164,6 +216,19 @@ seeds `.config`, and builds. Artifacts land in `bin/targets/airoha/en7523/`:
 | `*-initramfs-kernel.bin` | RAM boot over UART/YMODEM. Writes nothing to flash. |
 | `*-sysupgrade.bin` | The persistent image; belongs in slot B (`mtd3`, `tclinux_slave`). |
 
+Two options decide what goes in:
+
+* `--variant m2` (the release shape) carries Ethernet, Wi-Fi, LuCI and `apk`.
+  `--variant full` adds the optical frontend and the xPON/OMCI stack, which need
+  the per-unit BOB blob; the lists are
+  [`scripts/packages-m2.append`](scripts/packages-m2.append) and
+  [`scripts/packages.append`](scripts/packages.append).
+* `--initramfs` is on by default. Note that it changes the *kernel*, so the
+  `*-sysupgrade.bin` of such a build is not usable -- build once with
+  `--initramfs` for the RAM-boot image and again with `--no-initramfs` for the
+  persistent one. See item 6 in
+  [Six things that will bite you](#six-things-that-will-bite-you).
+
 Add `--imagebuilder` to also produce the Image Builder tarball, or run
 `./scripts/build-imagebuilder.sh openwrt -j8`. Full build documentation,
 including the mandatory kernel options, package seeding and how to bump the
@@ -171,7 +236,7 @@ pinned revision: [`docs/building.md`](docs/building.md).
 
 ---
 
-## Five things that will bite you
+## Six things that will bite you
 
 **1. The load address must equal the kernel's `_text`, or the UART is silent.**
 
@@ -229,6 +294,23 @@ contain your change:
 make package/kernel/mt76/clean && make package/kernel/mt76/compile
 ```
 
+**6. A build with `--initramfs` produces a `*-sysupgrade.bin` that cannot be used.**
+
+`--initramfs` is on by default, and it does not only add an artifact: it builds a
+kernel with the initramfs cpio embedded in it. `mtdsplit_fit` derives the kernel
+partition from the FIT size and then looks for the rootfs *after* the FIT, so the
+sysupgrade image from that build has its rootfs far outside `mtd4` -- MEASURED
+12,058,913 B with the squashfs at `0x760000`, against 9,437,473 B with the
+squashfs at `0x3A0000` for a clean build. Build the persistent image with
+`--no-initramfs`, and always gate it before flashing:
+
+```bash
+python3 tools/verify_image.py <image>
+```
+
+CI runs exactly this check on every sysupgrade image it releases, and refuses to
+publish one that fails. See [`docs/sysupgrade.md`](docs/sysupgrade.md).
+
 ---
 
 ## Flashing safety
@@ -262,10 +344,15 @@ openwrt/
   patches/          applied with `git apply` to existing upstream files
                     (0007-* selects the xPON symbols and kmod packages)
   optional-configs/ example files you can opt into, e.g. a pinned wireless config
-scripts/            pin.env, apply-overlay.sh, build-firmware.sh, packages.append
+scripts/            pin.env, apply-overlay.sh, build-firmware.sh,
+                    packages.append + packages-m2.append, publish-packages.sh
 imagebuilder/       build-image.sh + package list + first-boot overlay
 tools/              UART / YMODEM / console-paste / image-verify / DTS-vs-image / eeprom-MAC helpers
-docs/               hardware, Ethernet, LEDs, sysupgrade, PON and build documentation
+.github/workflows/  lint on every push; build.yml (reusable) and release.yml, which
+                    builds both images, verifies them, publishes a GitHub Release
+                    and updates the package repository on gh-pages
+docs/               hardware, Ethernet, LEDs, sysupgrade, PON, packages and build
+                    documentation
 ```
 
 ---
@@ -283,6 +370,7 @@ docs/               hardware, Ethernet, LEDs, sysupgrade, PON and build document
 | [`docs/building.md`](docs/building.md) | Pinned revision, the overlay, kernel options, package seeding, verifying |
 | [`docs/sysupgrade.md`](docs/sysupgrade.md) | Persistent install: `/dev/mtd*`, `platform.sh`, slot B, what survives |
 | [`docs/image-builder.md`](docs/image-builder.md) | Producing and using the project's Image Builder |
+| [`docs/packages.md`](docs/packages.md) | The prebuilt images, and the apk repository published per release |
 | [`docs/pon-port.md`](docs/pon-port.md) | Where the xPON/optical port stands, and what blocks it |
 | [`docs/status.md`](docs/status.md) | Milestones, what is proven, what is not |
 | [`docs/roadmap.md`](docs/roadmap.md) | Prioritised remaining work with acceptance criteria |

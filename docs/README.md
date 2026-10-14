@@ -35,6 +35,7 @@ in.
 | [building.md](building.md) | Prerequisites, applying the overlay, the mandatory kernel options, package seeding, building, verifying, bumping the pinned revision |
 | [sysupgrade.md](sysupgrade.md) | Persistent install: `MTD_BLOCK` and devtmpfs, `platform.sh`, writing slot B, which regions are safe to write, and what survives an upgrade |
 | [image-builder.md](image-builder.md) | Why the upstream Image Builder cannot build this board, and how to produce and use this project's own |
+| [packages.md](packages.md) | The prebuilt images, why kernel modules cannot come from OpenWrt, and the apk repository published per release |
 
 ## Background
 
