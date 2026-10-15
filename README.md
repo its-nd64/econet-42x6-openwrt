@@ -28,6 +28,20 @@ tftpboot 0x82000000 openwrt-airoha-en7523-econet_vgp-42x6v1-initramfs-kernel.bin
 bootm 0x82000000
 ```
 
+to make LAN4(physical label) into wan and change lan to .2.1:
+```
+uci set network.lan.ipaddr='192.168.2.1'
+uci del_list network.@device[0].ports='lan1'
+uci set network.wan=interface
+uci set network.wan.device='lan1'
+uci set network.wan.proto='dhcp'
+uci set network.wan6=interface
+uci set network.wan6.device='lan1'
+uci set network.wan6.proto='dhcpv6'
+uci commit network
+/etc/init.d/network restart
+```
+
 ---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
