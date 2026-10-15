@@ -43,6 +43,12 @@ uci commit network
 /etc/init.d/network restart
 ```
 
+# Keep each package symbol assigned exactly once.
+# The build wrapper verifies every seeded assignment after make defconfig;
+# duplicate y/n entries cause verification failures even when the final value is valid." - chatgpt so it sucks  
+
+got some iperf3 results, go check it out!
+
 ---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
