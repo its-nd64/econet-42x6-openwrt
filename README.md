@@ -9,7 +9,8 @@ to use that, you need to use a ch341 to program it, write it to 0x0 with no -d(i
 oh and apparently lan is broken so is tftp so you need to use loady and the dreaded tera term  
 i used barely modified u boot from openwrt to actually have tftp and boot firmwares  
 
-to flash it(copy it exactly, might brick something!!!!!):
+WARNING: mtd partitions are broken on my u boot currently, didnt have time to fix it. dont write it in the meantime  
+to flash it(copy it exactly, might brick something!!!!!):  
 ```
 loady 0x81800000
 // use tera term -> file -> tranfer -> ymodem -> send...  then select ts_n.bin  
