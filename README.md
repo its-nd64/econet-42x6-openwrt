@@ -1,5 +1,7 @@
 # econet-42x6-openwrt
+g
 
+---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
 
