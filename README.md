@@ -8,6 +8,7 @@ so its currently a dead end, i didnt continue to pursuit it further and used pat
 to use that, you need to use a ch341 to program it, write it to 0x0 with no -d(iirc)  
 oh and apparently lan is broken so is tftp so you need to use loady and the dreaded tera term  
 i used barely modified u boot from openwrt to actually have tftp and boot firmwares  
+
 to flash it(copy it exactly, might brick something!!!!!):
 ```
 loady 0x81800000
@@ -17,6 +18,15 @@ flash erase 0 0x80000
 flash write 0 0x80000 0x81800000
 ```
 btw 'flash' is the same as using ch341a with snander(no -d)  
+
+to boot his owrt:
+```
+// change to yours! ipaddr is what the router will get as its ip, just make sure to not collide with other devices on lan  
+// serverip is your tftp server ip, i use a window pc  
+setenv ipaddr 192.168.1.65; setenv serverip 192.168.1.144
+tftpboot 0x82000000 openwrt-airoha-en7523-econet_vgp-42x6v1-initramfs-kernel.bin
+bootm 0x82000000
+```
 
 ---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
