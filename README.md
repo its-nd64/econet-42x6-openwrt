@@ -1,5 +1,24 @@
 # econet-42x6-openwrt
 
+my fork to modify things that i want  
+i tried a weird hack to get into u boot: shorting DOUT pin of spi nand at boot at a certain time  
+it actually worked, printed bad crc and throw me into u boot  
+then i met a horrific prompt asking for username and password, i know none, only the hash  
+so its currently a dead end, i didnt continue to pursuit it further and used patched u boot with bypassed login and wrong checksum for convenience sake(ts.bin)  
+to use that, you need to use a ch341 to program it, write it to 0x0 with no -d(iirc)  
+oh and apparently lan is broken so is tftp so you need to use loady and the dreaded tera term  
+i used barely modified u boot from openwrt to actually have tftp and boot firmwares  
+to flash it(copy it exactly, might brick something!!!!!):
+```
+loady 0x81800000
+// use tera term -> file -> tranfer -> ymodem -> send...  then select ts_n.bin  
+// wait until it finish sending
+flash erase 0 0x80000
+flash write 0 0x80000 0x81800000
+```
+btw 'flash' is the same as using ch341a with snander(no -d)  
+
+---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
 
