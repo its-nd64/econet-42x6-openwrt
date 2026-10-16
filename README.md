@@ -49,6 +49,12 @@ uci commit network
 
 got some iperf3 results, go check it out!
 
+wifi callib on vendor has generic mac addr but also actual callib data, the device's mac seems to come from u boot env, i decided not to read it since no use tbh  
+callib data is at 0x6e0c000 in flash, ill make it a partition  
+
+
+
+
 ---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
