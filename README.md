@@ -47,6 +47,18 @@ got some iperf3 results, go check it out!
 wifi callib on vendor has generic mac addr but also actual callib data, the device's mac seems to come from u boot env  
 callib data is at 0x6e0c000 in flash, ill make it a partition  
 
+
+to flash openwrt into flash, be cautious!
+```
+// change to yours! ipaddr is what the router will get as its ip, just make sure to not collide with other devices on lan  
+// serverip is your tftp server ip, i use a window pc  
+setenv ipaddr 192.168.1.65
+setenv serverip 192.168.1.172; tftpboot 0x82000000 openwrt-airoha-en7523-econet_vgp-42x6v1-squashfs-sysupgrade.bin
+
+mtd erase tclinux_slave 0 0x2800000; mtd write tclinux_slave 0x82000000 0 ${filesize}
+mtd read tclinux_slave 0x8a000000 0 ${filesize}; cmp.b 0x82000000 0x8a000000 ${filesize}.
+```
+
 ---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
 (Airoha **EN7523** / EN7529CT SoC, 2x Cortex-A53 running AArch32).
