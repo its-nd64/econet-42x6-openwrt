@@ -10,13 +10,11 @@ oh and apparently lan is broken so is tftp so you need to use loady and the drea
 i used barely modified u boot from openwrt to actually have tftp and boot firmwares  
 
 WARNING: mtd partitions are broken on my u boot currently, didnt have time to fix it. dont write it in the meantime  
-to flash it(copy it exactly, might brick something!!!!!):  
+this is based on my 512kb dump(well with my macs and credentials), DO NOT flash this, this serve as a self guide  
 ```
-loady 0x81800000
-// use tera term -> file -> tranfer -> ymodem -> send...  then select ts_n.bin  
-// wait until it finish sending
-flash erase 0 0x80000
-flash write 0 0x80000 0x81800000
+tftpboot 0x82000000 512kb.bin
+mtd erase spi-nand0 0 0x80000
+mtd write spi-nand0 0x82000000 0 0x80000
 ```
 btw 'flash' is the same as using ch341a with snander(no -d)  
 
@@ -43,17 +41,10 @@ uci commit network
 /etc/init.d/network restart
 ```
 
-# Keep each package symbol assigned exactly once.
-# The build wrapper verifies every seeded assignment after make defconfig;
-# duplicate y/n entries cause verification failures even when the final value is valid." - chatgpt so it sucks  
-
 got some iperf3 results, go check it out!
 
-wifi callib on vendor has generic mac addr but also actual callib data, the device's mac seems to come from u boot env, i decided not to read it since no use tbh  
+wifi callib on vendor has generic mac addr but also actual callib data, the device's mac seems to come from u boot env  
 callib data is at 0x6e0c000 in flash, ill make it a partition  
-
-
-
 
 ---
 OpenWrt board support for the **Econet / vG vGP-42X6V1** GPON ONU
