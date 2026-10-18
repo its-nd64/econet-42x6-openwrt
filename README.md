@@ -49,6 +49,7 @@ callib data is at 0x6e0c000 in flash, ill make it a partition
 
 
 to flash openwrt into flash, be cautious!
+this only work on MY u-boot!!!!!
 ```
 // change to yours! ipaddr is what the router will get as its ip, just make sure to not collide with other devices on lan  
 // serverip is your tftp server ip, i use a window pc  
