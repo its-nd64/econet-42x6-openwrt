@@ -13,6 +13,9 @@ i used barely modified u boot from openwrt to actually have tftp and boot firmwa
 this is based on my 512kb dump(well with my macs and credentials), DO NOT flash this, this serve as a self guide  
 you would need to compress and insert your u boot into your dump, im too lazy to do this the proper way so it stay as a fixed 512kb file *for now*  
 ```
+// change to yours! ipaddr is what the router will get as its ip, just make sure to not collide with other devices on lan  
+// serverip is your tftp server ip, i use a window pc  
+setenv ipaddr 192.168.1.65; setenv serverip 192.168.1.144
 tftpboot 0x82000000 512kb.bin
 mtd erase spi-nand0 0 0x80000
 mtd write spi-nand0 0x82000000 0 0x80000
@@ -48,13 +51,13 @@ wifi callib on vendor has generic mac addr but also actual callib data, the devi
 callib data is at 0x6e0c000 in flash, ill make it a partition  
 
 
-to flash openwrt into flash, be cautious!
+to flash openwrt into flash, be cautious!  
 this only work on MY u-boot!!!!!
 ```
 // change to yours! ipaddr is what the router will get as its ip, just make sure to not collide with other devices on lan  
 // serverip is your tftp server ip, i use a window pc  
-setenv ipaddr 192.168.1.65
-setenv serverip 192.168.1.172; tftpboot 0x82000000 openwrt-airoha-en7523-econet_vgp-42x6v1-squashfs-sysupgrade.bin
+setenv ipaddr 192.168.1.65; setenv serverip 192.168.1.172
+tftpboot 0x82000000 openwrt-airoha-en7523-econet_vgp-42x6v1-squashfs-sysupgrade.bin
 
 mtd erase tclinux_slave 0 0x2800000; mtd write tclinux_slave 0x82000000 0 ${filesize}
 mtd read tclinux_slave 0x8a000000 0 ${filesize}; cmp.b 0x82000000 0x8a000000 ${filesize}.
