@@ -9,8 +9,9 @@ to use that, you need to use a ch341 to program it, write it to 0x0 with no -d(i
 oh and apparently lan is broken so is tftp so you need to use loady and the dreaded tera term  
 i used barely modified u boot from openwrt to actually have tftp and boot firmwares  
 
-WARNING: mtd partitions are broken on my u boot currently, didnt have time to fix it. dont write it in the meantime  
+~~WARNING: mtd partitions are broken on my u boot currently, didnt have time to fix it. dont write it in the meantime~~ fixed  
 this is based on my 512kb dump(well with my macs and credentials), DO NOT flash this, this serve as a self guide  
+you would need to compress and insert your u boot into your dump, im too lazy to do this the proper way so it stay as a fixed 512kb file *for now*  
 ```
 tftpboot 0x82000000 512kb.bin
 mtd erase spi-nand0 0 0x80000
